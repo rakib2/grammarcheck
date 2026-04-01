@@ -5,6 +5,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 interface SpeechButtonProps {
   onResult: (text: string) => void;
   onInterim?: (text: string) => void;
+  onListeningChange?: (listening: boolean) => void;
   disabled?: boolean;
   voiceMode?: boolean;
 }
@@ -19,7 +20,7 @@ const SUBMIT_TRIGGERS = /\b(done|okay|ok|fertig|analyse|analyze|check|prüf)\b/i
  * - Trigger words ("done", "okay", "fertig", "analyse") submit immediately
  * - 4s silence timeout (generous for thinking pauses)
  */
-export default function SpeechButton({ onResult, onInterim, disabled, voiceMode }: SpeechButtonProps) {
+export default function SpeechButton({ onResult, onInterim, onListeningChange, disabled, voiceMode }: SpeechButtonProps) {
   const [listening, setListening] = useState(false);
   const [supported, setSupported] = useState(false);
   const [interim, setInterim] = useState("");
@@ -31,6 +32,11 @@ export default function SpeechButton({ onResult, onInterim, disabled, voiceMode 
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     setSupported(!!SR);
   }, []);
+
+  // Notify parent when listening state changes
+  useEffect(() => {
+    onListeningChange?.(listening);
+  }, [listening, onListeningChange]);
 
   // Cleanup on unmount
   useEffect(() => {

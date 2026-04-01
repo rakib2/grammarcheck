@@ -8,7 +8,22 @@ import ScoreRing from "@/components/ScoreRing";
 import SpeechButton from "@/components/SpeechButton";
 import SpeakButton from "@/components/SpeakButton";
 import { useSpeech } from "@/lib/useSpeech";
+import { useVoiceState } from "@/lib/useVoiceState";
 import { Token, LearnerModel, ConversationState, CefrLevel, CorrectionLevel } from "@/types";
+
+// ── Helpers ──
+
+/** Escape HTML entities, then apply safe markdown-like transforms (bold + newlines). */
+function safeMarkdown(text: string): string {
+  const escaped = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+  return escaped
+    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\n/g, "<br/>");
+}
 
 // ── Types for API responses ──
 
@@ -100,9 +115,16 @@ export default function Home() {
   const [streamingSentence, setStreamingSentence] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const pendingPromptRef = useRef<string | null>(null);
 
-  // Speech synthesis — uses selected voice
-  const { speak, stop, speaking, supported: ttsSupported } = useSpeech({ voice: voiceChoice });
+  // Voice state machine — coordinates mic and TTS
+  const voice = useVoiceState({ autoListen: voiceMode });
+
+  // Speech synthesis — uses selected voice, notifies voice state on natural end
+  const { speak, stop, speaking, supported: ttsSupported } = useSpeech({
+    voice: voiceChoice,
+    onEnd: voice.finishSpeaking,
+  });
 
   // Load voice preferences
   useEffect(() => {
@@ -164,35 +186,42 @@ export default function Home() {
     }
   }, [turns, loading, needsLanguage, initializing]);
 
-  // Auto-speak nextPrompt after coach message finishes (streaming handles coachMessage TTS)
+  // When TTS finishes, speak queued nextPrompt or reset
   useEffect(() => {
-    if (!voiceMode || turns.length === 0 || speaking) return;
-    const lastTurn = turns[turns.length - 1];
-    if (lastTurn.result.nextPrompt) {
-      // Speak the follow-up prompt after the coach message audio ends
+    if (!speaking && pendingPromptRef.current && voiceMode) {
+      const prompt = pendingPromptRef.current;
+      pendingPromptRef.current = null;
+      // Small pause before the follow-up prompt
       const timer = setTimeout(() => {
-        if (!speaking) {
-          setSpeakingIdx(turns.length - 1);
-          speak(lastTurn.result.nextPrompt);
-        }
-      }, 500);
+        voice.startSpeaking();
+        speak(prompt);
+      }, 300);
       return () => clearTimeout(timer);
     }
-  }, [turns.length, speaking]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Reset speaking index when speech stops
-  useEffect(() => {
     if (!speaking) setSpeakingIdx(null);
-  }, [speaking]);
+  }, [speaking]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Speech input handler — auto-submit in voice mode ──
   function handleSpeechResult(text: string) {
     if (voiceMode && text.trim() && learnerModel && convState) {
-      // Auto-submit in voice mode
+      // Transition: RECORDING → PROCESSING
+      voice.startProcessing();
       setInput("");
       submitSentence(text.trim());
     } else {
       setInput(text);
+    }
+  }
+
+  // Notify voice state when mic starts/stops
+  function handleListeningChange(listening: boolean) {
+    if (listening) {
+      // Stop any playing TTS before recording
+      stop();
+      voice.startRecording();
+    } else if (voice.state === "RECORDING" && !voiceMode) {
+      // In non-voice mode, stopping mic goes back to IDLE
+      voice.stopRecording();
     }
   }
 
@@ -238,8 +267,11 @@ export default function Home() {
               setStreamingText((prev) => prev + event.text);
             } else if (event.type === "coachDone") {
               setStreamingText(event.text);
-              // Start TTS immediately — don't wait for analysis
-              if (voiceMode) {
+              // Start TTS — voice state gates this (blocked during RECORDING)
+              if (voiceMode && voice.canSpeak) {
+                voice.startSpeaking();
+                // Combine coach message + nextPrompt into one TTS call
+                // nextPrompt comes later in the "analysis" event, so just speak coach text now
                 speak(event.text);
               }
             } else if (event.type === "analysis") {
@@ -250,6 +282,10 @@ export default function Home() {
               saveModel(result.updatedModel);
               setStreamingText("");
               setStreamingSentence("");
+              // Queue nextPrompt to speak after coach message TTS finishes
+              if (voiceMode && result.nextPrompt) {
+                pendingPromptRef.current = result.nextPrompt;
+              }
             } else if (event.type === "error") {
               console.error("Stream error:", event.message);
               setInput(text);
@@ -288,7 +324,10 @@ export default function Home() {
     const next = !voiceMode;
     setVoiceMode(next);
     localStorage.setItem(VOICE_MODE_KEY, String(next));
-    if (!next) stop();
+    if (!next) {
+      stop();
+      voice.reset();
+    }
   }
 
   function handleSpeak(text: string, idx: number) {
@@ -539,9 +578,7 @@ export default function Home() {
                   </div>
                   <div className="flex-1 rounded-2xl rounded-bl-md bg-white px-4 py-3 text-sm text-gray-700 ring-1 ring-gray-100">
                     <div className="whitespace-pre-wrap" dangerouslySetInnerHTML={{
-                      __html: turn.result.responseText
-                        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                        .replace(/\n/g, '<br/>')
+                      __html: safeMarkdown(turn.result.responseText)
                     }} />
                   </div>
                   {ttsSupported && (
@@ -642,9 +679,7 @@ export default function Home() {
                   <div className="w-[44px]" /> {/* score placeholder */}
                   <div className="flex-1 rounded-2xl rounded-bl-md bg-white px-4 py-3 text-sm text-gray-700 ring-1 ring-gray-100">
                     <div className="whitespace-pre-wrap" dangerouslySetInnerHTML={{
-                      __html: streamingText
-                        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                        .replace(/\n/g, '<br/>')
+                      __html: safeMarkdown(streamingText)
                     }} />
                     <span className="inline-block w-1.5 h-4 bg-gray-400 animate-pulse ml-0.5 align-text-bottom" />
                   </div>
@@ -685,7 +720,8 @@ export default function Home() {
           <SpeechButton
             onResult={handleSpeechResult}
             onInterim={(text) => { if (!voiceMode) setInput(text); }}
-            disabled={loading}
+            onListeningChange={handleListeningChange}
+            disabled={loading || !voice.canRecord}
             voiceMode={voiceMode}
           />
           <textarea

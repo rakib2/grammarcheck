@@ -6,6 +6,7 @@ type Voice = "nova" | "shimmer" | "alloy" | "echo" | "fable" | "onyx";
 
 interface UseSpeechOptions {
   voice?: Voice;
+  onEnd?: () => void;
 }
 
 /**
@@ -16,10 +17,19 @@ interface UseSpeechOptions {
  *         echo (warm male), fable (expressive), onyx (deep male)
  */
 export function useSpeech(options: UseSpeechOptions = {}) {
-  const { voice = "nova" } = options;
+  const { voice = "nova", onEnd } = options;
   const [speaking, setSpeaking] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onEndRef = useRef(onEnd);
+  onEndRef.current = onEnd;
+
+  const markDone = useCallback(() => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    setSpeaking(false);
+    onEndRef.current?.();
+  }, []);
 
   const speak = useCallback(
     async (text: string) => {
@@ -38,6 +48,16 @@ export function useSpeech(options: UseSpeechOptions = {}) {
       const controller = new AbortController();
       abortRef.current = controller;
 
+      // Safety timeout: if TTS doesn't finish in 30s, force reset
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      timeoutRef.current = setTimeout(() => {
+        if (audioRef.current) {
+          audioRef.current.pause();
+          audioRef.current = null;
+        }
+        markDone();
+      }, 30000);
+
       try {
         const res = await fetch("/api/tts", {
           method: "POST",
@@ -54,15 +74,15 @@ export function useSpeech(options: UseSpeechOptions = {}) {
         audioRef.current = audio;
 
         audio.onended = () => {
-          setSpeaking(false);
           URL.revokeObjectURL(url);
           audioRef.current = null;
+          markDone();
         };
 
         audio.onerror = () => {
-          setSpeaking(false);
           URL.revokeObjectURL(url);
           audioRef.current = null;
+          markDone();
         };
 
         await audio.play();
@@ -90,18 +110,19 @@ export function useSpeech(options: UseSpeechOptions = {}) {
           const german = voices.find((v) => v.lang.startsWith("de"));
           if (german) utterance.voice = german;
 
-          utterance.onend = () => setSpeaking(false);
-          utterance.onerror = () => setSpeaking(false);
+          utterance.onend = () => markDone();
+          utterance.onerror = () => markDone();
           speechSynthesis.speak(utterance);
         } catch {
-          setSpeaking(false);
+          markDone();
         }
       }
     },
-    [voice]
+    [voice, markDone]
   );
 
   const stop = useCallback(() => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
     // Stop OpenAI audio
     if (audioRef.current) {
       audioRef.current.pause();
