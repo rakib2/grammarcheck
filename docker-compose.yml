@@ -1,0 +1,11 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3003:3003"
+    env_file:
+      - .env.local
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/.next

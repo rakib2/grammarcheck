@@ -1,0 +1,68 @@
+@import "tailwindcss";
+
+/* Rule card slide-in animation */
+@keyframes rule-card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.rule-card-enter {
+  animation: rule-card-enter 0.4s ease-out both;
+}
+
+/* Score pop animation */
+@keyframes score-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  60% {
+    transform: scale(1.1);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.score-pop {
+  animation: score-pop 0.5s ease-out both;
+}
+
+/* Fade in up for messages */
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in-up {
+  animation: fade-in-up 0.3s ease-out both;
+}
+
+/* Confetti burst */
+@keyframes confetti-fall {
+  0% {
+    opacity: 1;
+    transform: translateY(0) rotate(0deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(120px) rotate(720deg);
+  }
+}
+
+.confetti-particle {
+  animation: confetti-fall 1.2s ease-out both;
+}
