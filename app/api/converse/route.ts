@@ -21,12 +21,14 @@ interface ConverseRequestBody {
   sentence: string;
   learnerModel: LearnerModel;
   conversationState: ConversationState;
+  persistentErrors?: string[];
+  sessionFocus?: string[];
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body: ConverseRequestBody = await request.json();
-    const { sentence, learnerModel, conversationState } = body;
+    const { sentence, learnerModel, conversationState, persistentErrors, sessionFocus } = body;
 
     if (!sentence) {
       return NextResponse.json(
@@ -65,6 +67,14 @@ export async function POST(request: NextRequest) {
       coachLanguage = langSwitchMatch[1];
     }
 
+    // Resolve focus structure name for drilling context
+    let focusDrilling: string | undefined;
+    if (conversationState.focusStructure && conversationState.focusRemaining > 0) {
+      const { getStructureById } = await import("@/lib/grammarStructures");
+      const focusDef = getStructureById(conversationState.focusStructure);
+      focusDrilling = focusDef?.name ?? conversationState.focusStructure;
+    }
+
     const learnerContext: LearnerContext = {
       nativeLanguage: learnerModel.nativeLanguage,
       coachLanguage,
@@ -74,6 +84,9 @@ export async function POST(request: NextRequest) {
       improving,
       struggling,
       recentErrors,
+      focusDrilling,
+      persistentErrors,
+      sessionFocus,
     };
 
     // Create streaming response
@@ -121,6 +134,8 @@ export async function POST(request: NextRequest) {
                     updatedModel: output.updatedModel,
                     updatedState: output.updatedState,
                     lessonSuggestion: output.lessonSuggestion,
+                    activeRule: output.activeRule,
+                    deepPracticeNudge: output.deepPracticeNudge,
                   },
                 }) + "\n")
               );

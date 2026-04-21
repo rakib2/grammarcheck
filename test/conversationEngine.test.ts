@@ -89,7 +89,7 @@ describe("conversationEngine", () => {
   });
 
   describe("processUserTurn — correction levels", () => {
-    it("uses recast for first error on a structure", () => {
+    it("uses highlight for first error on a structure (teach immediately)", () => {
       const input = makeInput({
         analysis: {
           errors: [{
@@ -104,7 +104,7 @@ describe("conversationEngine", () => {
       });
       const output = processUserTurn(input);
       expect(output.corrections).toHaveLength(1);
-      expect(output.corrections[0].level).toBe("recast");
+      expect(output.corrections[0].level).toBe("highlight");
     });
 
     it("uses highlight for second error on same structure", () => {

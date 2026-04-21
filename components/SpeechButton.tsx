@@ -8,6 +8,8 @@ interface SpeechButtonProps {
   onListeningChange?: (listening: boolean) => void;
   disabled?: boolean;
   voiceMode?: boolean;
+  /** When this transitions false→true, auto-start the mic (used by autoListen after TTS) */
+  autoStart?: boolean;
 }
 
 // Trigger words that signal the user is done speaking and wants analysis
@@ -20,13 +22,14 @@ const SUBMIT_TRIGGERS = /\b(done|okay|ok|fertig|analyse|analyze|check|prüf)\b/i
  * - Trigger words ("done", "okay", "fertig", "analyse") submit immediately
  * - 4s silence timeout (generous for thinking pauses)
  */
-export default function SpeechButton({ onResult, onInterim, onListeningChange, disabled, voiceMode }: SpeechButtonProps) {
+export default function SpeechButton({ onResult, onInterim, onListeningChange, disabled, voiceMode, autoStart }: SpeechButtonProps) {
   const [listening, setListening] = useState(false);
   const [supported, setSupported] = useState(false);
   const [interim, setInterim] = useState("");
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const transcriptRef = useRef("");
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevAutoStartRef = useRef(false);
 
   useEffect(() => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -179,6 +182,16 @@ export default function SpeechButton({ onResult, onInterim, onListeningChange, d
       startListening();
     }
   }, [listening, stopListening, startListening]);
+
+  // Auto-start mic when parent requests (rising edge only)
+  // This fires when autoListen kicks in after TTS finishes
+  useEffect(() => {
+    const wasOff = !prevAutoStartRef.current;
+    prevAutoStartRef.current = !!autoStart;
+    if (autoStart && wasOff && !listening && !disabled) {
+      startListening();
+    }
+  }, [autoStart, listening, disabled, startListening]);
 
   if (!supported) return null;
 

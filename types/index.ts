@@ -174,4 +174,7 @@ export interface ConversationState {
   currentTarget: string | null;     // structure ID being targeted
   turnsSinceLastCorrection: number;
   sessionStructuresCovered: string[];
+  /** When the learner makes an error, we drill the same grammar topic for a few turns */
+  focusStructure: string | null;    // structure ID to keep drilling
+  focusRemaining: number;           // turns left before moving on (0 = no focus)
 }

@@ -1,22 +1,32 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Suspense, useState, useEffect } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import SkillTree from "@/components/SkillTree";
 import { CURRICULUM } from "@/lib/curriculum";
 import { UserLessonProgress } from "@/types";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/AuthContext";
+import AuthGuard from "@/components/AuthGuard";
 
-export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+/**
+ * All lessons are always available — the tutor adapts to the learner,
+ * not the other way around. Progress tracking shows what's been done,
+ * but nothing is locked.
+ */
+
+function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const activeLessonId = searchParams.get("lesson") ?? undefined;
   const [progress, setProgress] = useState<Record<string, UserLessonProgress>>({});
 
   useEffect(() => {
     async function loadProgress() {
       const { data: rows } = await supabase.from("user_progress").select("*");
 
-      if (rows) {
+      if (rows && rows.length > 0) {
         const map: Record<string, UserLessonProgress> = {};
         for (const row of rows) {
           map[row.lesson_id] = {
@@ -31,16 +41,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           };
         }
         setProgress(map);
-      }
-
-      if (!rows || rows.length === 0) {
+      } else {
+        // Initialize: all lessons available — tutor adapts, nothing locked
         const initial: Record<string, UserLessonProgress> = {};
         for (const lesson of CURRICULUM) {
           initial[lesson.id] = {
             id: "",
             userId: "",
             lessonId: lesson.id,
-            status: lesson.cefrLevel === "A1" ? "available" : "locked",
+            status: "available",
             phase: "teach",
             drillScore: null,
             writeScore: null,
@@ -59,9 +68,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="grid h-screen grid-cols-[220px_1fr] bg-gray-50">
-      {/* Sidebar — clean and minimal */}
+      {/* Sidebar */}
       <aside className="flex flex-col border-r border-gray-200 bg-white">
-        {/* Logo + navigation */}
         <div className="border-b border-gray-100 px-4 py-4">
           <Link href="/" className="flex items-center gap-2">
             <span className="flex h-6 w-6 items-center justify-center rounded-md bg-gray-900 text-[10px] font-bold text-white">G</span>
@@ -69,7 +77,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </Link>
         </div>
 
-        {/* Quick links */}
         <div className="space-y-0.5 px-3 py-3 border-b border-gray-100">
           <Link
             href="/"
@@ -92,26 +99,56 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </Link>
         </div>
 
-        {/* Lesson tree */}
         <div className="flex-1 overflow-y-auto px-3 py-3">
           <p className="mb-2 px-3 text-[10px] font-medium uppercase tracking-wider text-gray-400">
             Lessons
           </p>
-          <SkillTree lessons={CURRICULUM} progress={progress} />
+          <SkillTree lessons={CURRICULUM} progress={progress} activeLessonId={activeLessonId} />
         </div>
 
-        {/* Footer — minimal */}
-        <div className="border-t border-gray-100 px-4 py-3">
-          <p className="text-[10px] text-gray-400">
-            {completedCount}/{CURRICULUM.length} completed
-          </p>
-        </div>
+        <SidebarFooter completedCount={completedCount} />
       </aside>
 
-      {/* Main content */}
       <main className="flex flex-col overflow-hidden">
         {children}
       </main>
     </div>
+  );
+}
+
+function SidebarFooter({ completedCount }: { completedCount: number }) {
+  const { user, signOut } = useAuth();
+
+  return (
+    <div className="border-t border-gray-100 px-4 py-3 space-y-1">
+      <p className="text-[10px] text-gray-400">
+        {completedCount}/{CURRICULUM.length} completed
+      </p>
+      {user && (
+        <div className="flex items-center justify-between">
+          <p className="truncate text-[10px] text-gray-400">{user.email}</p>
+          <button
+            onClick={signOut}
+            className="text-[10px] text-gray-400 hover:text-gray-600"
+          >
+            Sign out
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <AuthGuard>
+      <Suspense fallback={
+        <div className="flex h-screen items-center justify-center bg-gray-50">
+          <p className="text-sm text-gray-400">Loading...</p>
+        </div>
+      }>
+        <DashboardLayoutInner>{children}</DashboardLayoutInner>
+      </Suspense>
+    </AuthGuard>
   );
 }

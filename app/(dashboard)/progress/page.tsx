@@ -6,6 +6,15 @@ import { supabase } from "@/lib/supabase";
 import { CURRICULUM, CEFR_LEVELS } from "@/lib/curriculum";
 import { CefrLevel, UserLessonProgress, LearnerModel, ErrorPattern } from "@/types";
 import { generateLearningPath, PathItem, getLessonForStructure } from "@/lib/learningPath";
+import {
+  loadSnapshots,
+  loadSummaries,
+  getAggregateTrend,
+  detectPersistentErrors,
+  MasterySnapshot,
+  SessionSummary,
+  PersistentErrorAlert,
+} from "@/lib/sessionMemory";
 
 const STORAGE_KEY = "grammarcoach_learner_model";
 
@@ -22,6 +31,9 @@ export default function ProgressPage() {
   const [progress, setProgress] = useState<Record<string, UserLessonProgress>>({});
   const [learnerModel, setLearnerModel] = useState<LearnerModel | null>(null);
   const [learningPath, setLearningPath] = useState<PathItem[]>([]);
+  const [snapshots, setSnapshots] = useState<MasterySnapshot[]>([]);
+  const [summaries, setSummaries] = useState<SessionSummary[]>([]);
+  const [persistentAlerts, setPersistentAlerts] = useState<PersistentErrorAlert[]>([]);
   const [streak, setStreak] = useState(0);
   const [xp, setXp] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -35,6 +47,13 @@ export default function ProgressPage() {
       if (model) {
         setLearnerModel(model);
         setLearningPath(generateLearningPath(model));
+
+        // Load cross-session data
+        const snaps = loadSnapshots();
+        const sums = loadSummaries();
+        setSnapshots(snaps);
+        setSummaries(sums);
+        setPersistentAlerts(detectPersistentErrors(model, snaps));
       }
 
       // User progress from Supabase
@@ -119,6 +138,82 @@ export default function ProgressPage() {
             </div>
           ))}
         </div>
+
+        {/* Mastery Trend — cross-session progress visualization */}
+        {snapshots.length >= 2 && (
+          <MasteryTrendChart snapshots={snapshots} />
+        )}
+
+        {/* Persistent Error Alerts */}
+        {persistentAlerts.filter((a) => a.severity !== "watch").length > 0 && (
+          <div className="rounded-xl bg-white p-5 ring-1 ring-gray-100">
+            <h2 className="text-sm font-semibold text-gray-800">Persistent Challenges</h2>
+            <p className="mb-4 mt-0.5 text-xs text-gray-400">
+              These keep coming up across sessions
+            </p>
+            <div className="space-y-2">
+              {persistentAlerts.filter((a) => a.severity !== "watch").map((alert) => {
+                const lessonId = getLessonForStructure(alert.structureId);
+                return (
+                  <div
+                    key={alert.structureId}
+                    className={`flex items-center justify-between rounded-lg px-4 py-3 ${
+                      alert.severity === "intervention"
+                        ? "bg-red-50 border border-red-200"
+                        : "bg-amber-50 border border-amber-200"
+                    }`}
+                  >
+                    <div>
+                      <p className={`text-sm font-medium ${alert.severity === "intervention" ? "text-red-800" : "text-amber-800"}`}>
+                        {alert.structureName}
+                      </p>
+                      <p className={`text-xs ${alert.severity === "intervention" ? "text-red-600" : "text-amber-600"}`}>
+                        {alert.totalCount} errors across {alert.sessionsWithError} session{alert.sessionsWithError !== 1 ? "s" : ""}
+                      </p>
+                    </div>
+                    {lessonId && (
+                      <button
+                        onClick={() => router.push(`/chat?lesson=${lessonId}`)}
+                        className="shrink-0 rounded-lg bg-white px-3 py-1 text-[11px] font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+                      >
+                        Practice
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Session History */}
+        {summaries.length > 0 && (
+          <div className="rounded-xl bg-white p-5 ring-1 ring-gray-100">
+            <h2 className="text-sm font-semibold text-gray-800">Session History</h2>
+            <p className="mb-4 mt-0.5 text-xs text-gray-400">
+              Your recent practice sessions
+            </p>
+            <div className="space-y-2">
+              {[...summaries].reverse().slice(0, 10).map((s, i) => (
+                <div key={i} className="rounded-lg bg-gray-50 px-4 py-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-medium text-gray-700">Session {s.sessionNumber}</span>
+                    <span className="text-[10px] text-gray-400">
+                      {new Date(s.timestamp).toLocaleDateString()}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-600">{s.summaryText}</p>
+                  <div className="mt-2 flex gap-3 text-[10px] text-gray-400">
+                    <span>{s.turnCount} exchanges</span>
+                    <span>{s.errorsThisSession} corrected</span>
+                    {s.topStrength && <span className="text-green-600">↑ {s.topStrength}</span>}
+                    {s.topWeakness && <span className="text-amber-600">↓ {s.topWeakness}</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* My Mistakes — clean overview of error patterns */}
         {learnerModel && learnerModel.errorPatterns.length > 0 && (
@@ -393,6 +488,75 @@ function AIInsights({ model }: { model: LearnerModel }) {
             {model.totalTurns} sentences analyzed, {model.structures.length} structures discovered, {totalErrors} total corrections made.
             Level: {model.detectedLevel}.
           </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Mastery trend visualization using CSS bars (no chart library needed) */
+function MasteryTrendChart({ snapshots }: { snapshots: MasterySnapshot[] }) {
+  const trend = getAggregateTrend(snapshots);
+  const maxMastery = Math.max(...trend.map((t) => t.avgMastery), 0.1);
+
+  return (
+    <div className="rounded-xl bg-white p-5 ring-1 ring-gray-100">
+      <h2 className="text-sm font-semibold text-gray-800">Progress Over Time</h2>
+      <p className="mb-4 mt-0.5 text-xs text-gray-400">
+        Average mastery across {trend.length} session{trend.length !== 1 ? "s" : ""}
+      </p>
+
+      {/* Mastery bar chart */}
+      <div className="flex items-end gap-1 h-24">
+        {trend.map((point, i) => {
+          const height = Math.max((point.avgMastery / maxMastery) * 100, 4);
+          const isLatest = i === trend.length - 1;
+          return (
+            <div
+              key={i}
+              className="flex-1 flex flex-col items-center gap-1"
+              title={`Session ${point.session}: ${Math.round(point.avgMastery * 100)}% avg mastery, ${point.mastered} mastered`}
+            >
+              <span className="text-[9px] text-gray-400">
+                {Math.round(point.avgMastery * 100)}%
+              </span>
+              <div
+                className={`w-full rounded-t transition-all ${isLatest ? "bg-gray-900" : "bg-gray-300"}`}
+                style={{ height: `${height}%` }}
+              />
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Session labels */}
+      <div className="flex gap-1 mt-1">
+        {trend.map((point, i) => (
+          <div key={i} className="flex-1 text-center text-[9px] text-gray-400">
+            S{point.session}
+          </div>
+        ))}
+      </div>
+
+      {/* Summary stats */}
+      <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+        <div className="rounded-lg bg-gray-50 py-2">
+          <p className="text-sm font-bold text-gray-900">
+            {trend.length > 0 ? Math.round(trend[trend.length - 1].avgMastery * 100) : 0}%
+          </p>
+          <p className="text-[10px] text-gray-400">Current avg</p>
+        </div>
+        <div className="rounded-lg bg-gray-50 py-2">
+          <p className="text-sm font-bold text-gray-900">
+            {trend.length > 0 ? trend[trend.length - 1].mastered : 0}
+          </p>
+          <p className="text-[10px] text-gray-400">Mastered</p>
+        </div>
+        <div className="rounded-lg bg-gray-50 py-2">
+          <p className="text-sm font-bold text-gray-900">
+            {trend.length > 0 ? trend[trend.length - 1].totalErrors : 0}
+          </p>
+          <p className="text-[10px] text-gray-400">Total errors</p>
         </div>
       </div>
     </div>

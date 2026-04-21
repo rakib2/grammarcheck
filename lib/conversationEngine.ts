@@ -11,7 +11,7 @@ import {
 } from "@/types";
 import { getStructureById, getStructuresUpToLevel, GRAMMAR_STRUCTURES } from "./grammarStructures";
 import { createSRSItem, updateSRSItem, getDueItems, assessQuality } from "./spacedRepetition";
-import { getInlineSuggestion } from "./learningPath";
+import { getInlineSuggestion, getLessonForStructure } from "./learningPath";
 
 // ═══════════════════════════════════════════════════════════════
 // ACL: Adaptive Conversational Loop
@@ -54,6 +54,25 @@ export interface LessonSuggestion {
   lessonId: string;
 }
 
+export interface ActiveRule {
+  structureId: string;
+  structureName: string;
+  description: string;
+  l1Comparison: string | null;
+  errorCount: number;
+  mastery: number;
+  lessonId: string | null;
+}
+
+export interface DeepPracticeNudge {
+  structureId: string;
+  structureName: string;
+  errorCount: number;
+  mastery: number;
+  lessonId: string;
+  message: string;
+}
+
 export interface EngineOutput {
   responseText: string;
   corrections: DisplayCorrection[];
@@ -66,6 +85,10 @@ export interface EngineOutput {
   tokens: APIAnalysisResult["tokens"];
   /** Inline lesson suggestion when a structure has repeated errors */
   lessonSuggestion: LessonSuggestion | null;
+  /** Full grammar rule for sidebar display during drilling or after errors */
+  activeRule: ActiveRule | null;
+  /** Strong recommendation for deep practice when error pattern is clear */
+  deepPracticeNudge: DeepPracticeNudge | null;
 }
 
 export interface DisplayCorrection {
@@ -230,13 +253,42 @@ export function processUserTurn(input: EngineInput): EngineOutput {
     timestamp: new Date().toISOString(),
   };
 
+  // ── Focus drilling logic ──
+  // When an error occurs, drill the same structure for the next 2 turns
+  // If the learner gets the focus structure right, clear the focus early
+  let focusStructure = conversationState.focusStructure;
+  let focusRemaining = conversationState.focusRemaining;
+
+  if (turnErrors.length > 0) {
+    // New error — start or extend drilling on the first error's structure
+    const primaryError = turnErrors[0];
+    focusStructure = primaryError.structureId;
+    focusRemaining = 2; // drill for 2 more turns
+  } else if (focusStructure) {
+    // No errors this turn — did they use the focus structure correctly?
+    const usedFocusCorrectly = analysisFromAPI.structuresUsed.includes(focusStructure);
+    if (usedFocusCorrectly) {
+      // They got it right — clear the focus
+      focusStructure = null;
+      focusRemaining = 0;
+    } else {
+      // They didn't use it (maybe answered differently) — decrement
+      focusRemaining = Math.max(0, focusRemaining - 1);
+      if (focusRemaining === 0) {
+        focusStructure = null;
+      }
+    }
+  }
+
   const updatedState: ConversationState = {
     turns: [...conversationState.turns, userTurn, coachTurn],
-    currentTarget: getTargetStructure(updatedSRS, updatedStructures, totalTurns),
+    currentTarget: focusStructure ?? getTargetStructure(updatedSRS, updatedStructures, totalTurns),
     turnsSinceLastCorrection: turnErrors.length > 0 ? 0 : conversationState.turnsSinceLastCorrection + 1,
     sessionStructuresCovered: Array.from(
       new Set([...conversationState.sessionStructuresCovered, ...analysisFromAPI.structuresUsed])
     ),
+    focusStructure,
+    focusRemaining,
   };
 
   // ── STEP 6: SUGGEST LESSON ──
@@ -250,6 +302,19 @@ export function processUserTurn(input: EngineInput): EngineOutput {
     }
   }
 
+  // ── STEP 7: ACTIVE RULE (for sidebar display) ──
+  // Show the grammar rule being drilled, or the rule for the primary error
+  const activeRule = computeActiveRule(
+    focusStructure,
+    turnErrors,
+    updatedModel,
+    learnerModel.nativeLanguage
+  );
+
+  // ── STEP 8: DEEP PRACTICE NUDGE ──
+  // When 3+ errors on same structure, strongly recommend deep practice
+  const deepPracticeNudge = computeDeepPracticeNudge(turnErrors, updatedModel);
+
   return {
     responseText: responseParts.join("\n\n"),
     corrections,
@@ -261,6 +326,8 @@ export function processUserTurn(input: EngineInput): EngineOutput {
     updatedModel,
     updatedState,
     lessonSuggestion,
+    activeRule,
+    deepPracticeNudge,
   };
 }
 
@@ -273,10 +340,9 @@ function determineCorrectionLevel(
   model: LearnerModel
 ): CorrectionLevel {
   const pattern = model.errorPatterns.find((p) => p.structureId === structureId);
-  if (!pattern) return "recast";        // first time — be subtle
-  if (pattern.count === 1) return "recast";
-  if (pattern.count === 2) return "highlight";
-  return "explicit";                      // 3+ times — full explanation
+  if (!pattern) return "highlight";       // first time — clear explanation (not subtle)
+  if (pattern.count <= 2) return "highlight";
+  return "explicit";                      // 3+ times — deep drill with examples
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -372,29 +438,28 @@ function buildCorrectionResponse(
   analysis: APIAnalysisResult,
   model: LearnerModel
 ): string {
-  // Always lead with Claude's warm, conversational message
-  // It already responds to meaning first, then folds in corrections
+  // The coach message from Claude now includes clear teaching (not just conversation).
+  // The system prompt tells Claude to explain errors directly in the spoken response.
+  // We still add structured correction notes for the visual display.
   const parts: string[] = [analysis.coachMessage];
 
-  // Only add mechanical correction notes for highlight/explicit level
-  // Recasts are already handled naturally in the coachMessage
-  const highlights = errors.filter((e) => e.correctionLevel === "highlight");
-  const explicits = errors.filter((e) => e.correctionLevel === "explicit");
-
-  // Highlights — gentle nudge (second time seeing this error)
-  for (const h of highlights) {
-    parts.push(`**${h.original}** → **${h.correction}** — ${h.rule}`);
-  }
-
-  // Explicits — full explanation (3+ times, they need the rule)
-  for (const e of explicits) {
-    const structDef = getStructureById(e.structureId);
+  // Add structured correction cards for visual display
+  for (const error of errors) {
+    const structDef = getStructureById(error.structureId);
     const l1Note = structDef?.l1Interference[model.nativeLanguage];
-    let msg = `**${e.original}** → **${e.correction}**. ${e.rule}`;
-    if (l1Note) {
-      msg += `\n${l1Note}`;
+
+    if (error.correctionLevel === "explicit") {
+      // Deep drill — full explanation with L1 comparison
+      let msg = `${error.original} → ${error.correction}`;
+      msg += `\n${error.rule}`;
+      if (l1Note) {
+        msg += `\n${l1Note}`;
+      }
+      parts.push(msg);
+    } else {
+      // Clear correction with rule
+      parts.push(`${error.original} → ${error.correction} — ${error.rule}`);
     }
-    parts.push(msg);
   }
 
   return parts.join("\n\n");
@@ -412,9 +477,25 @@ function determineNextPrompt(
   currentTurn: number,
   fallbackPrompt: string
 ): string {
-  // Prefer Claude's AI-generated prompt — it's context-aware and feels natural.
-  // Only fall back to hardcoded prompts when the AI prompt is empty or for
-  // the very first encounter with a structure (where we need a guaranteed elicitor).
+  // Prefer Claude's AI-generated prompt — it already knows the target structure
+  // and generates varied, conversational questions that elicit the right grammar.
+
+  // 0. Focus drilling — if we're drilling a specific structure, stay on it
+  // The AI prompt should already target this (via currentTarget in system prompt)
+  // but if the AI prompt is empty, use hardcoded prompts
+  if (state.focusStructure && state.focusRemaining > 0) {
+    if (fallbackPrompt && fallbackPrompt.trim()) {
+      return fallbackPrompt; // AI already knows the target
+    }
+    const focusDef = getStructureById(state.focusStructure);
+    if (focusDef) {
+      const prompts = focusDef.elicitingPrompts;
+      const unused = prompts.filter((p) => !state.turns.some((t) => t.text === p));
+      return unused.length > 0
+        ? unused[Math.floor(Math.random() * unused.length)]
+        : prompts[Math.floor(Math.random() * prompts.length)];
+    }
+  }
 
   // 1. Check SRS queue for due items
   const dueItems = getDueItems(srsQueue, currentTurn);
@@ -478,6 +559,71 @@ function determineNextPrompt(
   return fallbackPrompt;
 }
 
+// ───────────────────────────────────────────────────────────────
+// Helper: Compute active grammar rule for sidebar display
+// ───────────────────────────────────────────────────────────────
+
+function computeActiveRule(
+  focusStructure: string | null,
+  turnErrors: TurnError[],
+  model: LearnerModel,
+  nativeLanguage: string
+): ActiveRule | null {
+  // Priority: drilling structure > primary error structure
+  const targetId = focusStructure ?? (turnErrors.length > 0 ? turnErrors[0].structureId : null);
+  if (!targetId) return null;
+
+  const structDef = getStructureById(targetId);
+  if (!structDef) return null;
+
+  const structure = model.structures.find((s) => s.id === targetId);
+  const errorPattern = model.errorPatterns.find((p) => p.structureId === targetId);
+
+  return {
+    structureId: targetId,
+    structureName: structDef.name,
+    description: structDef.description,
+    l1Comparison: structDef.l1Interference[nativeLanguage] ?? null,
+    errorCount: errorPattern?.count ?? 0,
+    mastery: structure?.mastery ?? 0,
+    lessonId: getLessonForStructure(targetId),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────
+// Helper: Compute deep practice nudge
+// When a learner keeps making the same type of mistake (3+),
+// they need structured practice, not just conversation corrections
+// ───────────────────────────────────────────────────────────────
+
+function computeDeepPracticeNudge(
+  turnErrors: TurnError[],
+  model: LearnerModel
+): DeepPracticeNudge | null {
+  for (const error of turnErrors) {
+    const pattern = model.errorPatterns.find((p) => p.structureId === error.structureId);
+    if (!pattern || pattern.count < 3) continue;
+
+    const lessonId = getLessonForStructure(error.structureId);
+    if (!lessonId) continue;
+
+    const structDef = getStructureById(error.structureId);
+    const structure = model.structures.find((s) => s.id === error.structureId);
+    const name = structDef?.name ?? error.structureId;
+    const mastery = structure ? Math.round(structure.mastery * 100) : 0;
+
+    return {
+      structureId: error.structureId,
+      structureName: name,
+      errorCount: pattern.count,
+      mastery,
+      lessonId,
+      message: `You've made ${pattern.count} mistakes with ${name} (${mastery}% mastery). A focused practice session on just this topic would help lock it in.`,
+    };
+  }
+  return null;
+}
+
 function getTargetStructure(
   srsQueue: LearnerModel["spacedRepetitionQueue"],
   structures: GrammarStructure[],
@@ -523,6 +669,8 @@ export function createConversationState(): ConversationState {
     currentTarget: null,
     turnsSinceLastCorrection: 0,
     sessionStructuresCovered: [],
+    focusStructure: null,
+    focusRemaining: 0,
   };
 }
 
@@ -530,7 +678,10 @@ export function createConversationState(): ConversationState {
 // Generate the opening prompt for a new session
 // ───────────────────────────────────────────────────────────────
 
-export function getSessionOpener(model: LearnerModel): string {
+export function getSessionOpener(
+  model: LearnerModel,
+  topicRecommendations?: { name: string; reason: string; priority: number }[]
+): string {
   // First session ever — warm welcome
   if (model.sessionCount === 0) {
     return "Hey! Just say anything in German — even one word is totally fine. There's no wrong answer here, I just want to hear where you're at. We'll figure out the rest together.";
@@ -539,6 +690,20 @@ export function getSessionOpener(model: LearnerModel): string {
   // Second session — acknowledge they came back
   if (model.sessionCount === 1) {
     return "Hey, welcome back! Last time went well. Ready to pick up where we left off? Just write whatever comes to mind in German.";
+  }
+
+  // Cross-session intelligence: if we have priority recommendations, weave them in
+  if (topicRecommendations && topicRecommendations.length > 0) {
+    const topRec = topicRecommendations[0];
+    if (topRec.priority <= 2) {
+      // High priority — persistent error or declining mastery
+      const frames = [
+        `Welcome back! I noticed ${topRec.name} has been tricky for you lately. Let's work on that today — try using it in a sentence about your day.`,
+        `Hey! Let's focus on ${topRec.name} this session — ${topRec.reason}. Give it a try in German!`,
+        `Good to see you again! Today I want to help you with ${topRec.name}. Tell me something in German using that structure.`,
+      ];
+      return frames[Math.floor(Math.random() * frames.length)];
+    }
   }
 
   // Returning user — personalize based on their journey

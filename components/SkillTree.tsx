@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { CefrLevel, CurriculumLesson, UserLessonProgress, LessonStatus } from "@/types";
 import { CEFR_LEVELS } from "@/lib/curriculum";
@@ -13,14 +13,46 @@ interface SkillTreeProps {
 
 export default function SkillTree({ lessons, progress, activeLessonId }: SkillTreeProps) {
   const router = useRouter();
-  const [expandedLevels, setExpandedLevels] = useState<Set<CefrLevel>>(() => new Set<CefrLevel>(["A1"]));
+  const [expandedLevels, setExpandedLevels] = useState<Set<CefrLevel>>(new Set<CefrLevel>());
+
+  // Restore expanded levels from localStorage after hydration
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("expandedLevels");
+      if (saved) {
+        setExpandedLevels(new Set<CefrLevel>(JSON.parse(saved)));
+      }
+    } catch {}
+  }, []);
+
+  // Persist expanded levels to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem("expandedLevels", JSON.stringify(Array.from(expandedLevels)));
+    } catch {}
+  }, [expandedLevels]);
+
+  // Auto-expand the level containing the active lesson
+  useEffect(() => {
+    if (!activeLessonId) return;
+    const activeLesson = lessons.find((l) => l.id === activeLessonId);
+    if (activeLesson && !expandedLevels.has(activeLesson.cefrLevel)) {
+      setExpandedLevels((prev) => {
+        const next = new Set(prev);
+        next.add(activeLesson.cefrLevel);
+        return next;
+      });
+    }
+  }, [activeLessonId, lessons]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function toggleLevel(level: CefrLevel) {
     setExpandedLevels((prev) => {
-      const next = new Set(prev);
-      if (next.has(level)) next.delete(level);
-      else next.add(level);
-      return next;
+      if (prev.has(level)) {
+        // Collapse: close this level
+        return new Set<CefrLevel>();
+      }
+      // Expand: open only this level, close others
+      return new Set<CefrLevel>([level]);
     });
   }
 
