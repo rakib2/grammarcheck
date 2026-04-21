@@ -44,13 +44,22 @@ export const REALTIME_TOOLS = [
     type: "function" as const,
     name: "analyze_german_sentence",
     description:
-      "Analyze a German sentence spoken by the learner. Call this EVERY TIME the learner says something in German. Returns grammar corrections, a coaching message, and a nextPrompt suggestion. Rules: (1) Speak ONLY the coachMessage — keep it to 1–2 sentences. (2) NEVER read the nextPrompt aloud — it is for the UI only. (3) After the coachMessage, STOP. Do not chain a follow-up question. The learner needs silent time to read and absorb. (4) Do not invent grammar corrections — trust the tool. (5) Do not suggest switching to a separate lesson — the app's UI handles that silently.",
+      "Analyze what the learner just said in German. Call this EVERY TIME the learner speaks in German. " +
+      "INPUT — what to pass: the learner's COMPLETE utterance, verbatim, every sentence and every word they said since you last spoke. " +
+      "Do NOT summarize, truncate, pick only the last sentence, or rephrase. Pass the exact transcript. " +
+      "If they spoke three sentences, the `sentence` argument must contain all three, joined as they said them. " +
+      "OUTPUT — what to do with the result: speak the ENTIRE coachMessage from the result (it has already been kept short by the engine — 2–3 sentences). " +
+      "Do NOT read the nextPrompt aloud — it is shown to the learner visually. " +
+      "After the coachMessage, STOP. Do not chain a follow-up question. " +
+      "Do not invent grammar corrections — trust the tool. " +
+      "Do not suggest switching to a separate lesson — the app's UI handles that.",
     parameters: {
       type: "object",
       properties: {
         sentence: {
           type: "string",
-          description: "The German sentence the learner said",
+          description:
+            "The learner's FULL spoken utterance, verbatim. Include every sentence they said this turn, in order, joined naturally. Do not truncate, summarize, pick only the last sentence, or modify wording. If they said multiple sentences, pass them all.",
         },
       },
       required: ["sentence"],
