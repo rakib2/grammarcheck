@@ -486,14 +486,10 @@ function HomeContent() {
     }
   }, [turns, loading, needsLanguage, initializing]);
 
-  // Auto-speak opener on session start
-  const openerSpokenRef = useRef(false);
-  useEffect(() => {
-    if (opener && !initializing && !openerSpokenRef.current) {
-      openerSpokenRef.current = true;
-      speak(opener);
-    }
-  }, [opener, initializing]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Opener is no longer auto-spoken on page load. Some browsers block
+  // autoplay audio pre-interaction (silent TTS fallback, then a second
+  // source playing = echo). The manual SpeakButton next to the opener
+  // text still lets the learner hear it on demand.
 
   // Clear manual speak index when TTS stops
   useEffect(() => {

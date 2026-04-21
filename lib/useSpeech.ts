@@ -35,13 +35,19 @@ export function useSpeech(options: UseSpeechOptions = {}) {
     async (text: string) => {
       if (!text.trim()) return;
 
-      // Stop any currently playing audio
+      // Stop any currently playing audio — OpenAI element AND browser TTS.
+      // The browser-TTS fallback wasn't being cancelled here, so a stale
+      // utterance could keep speaking while the next OpenAI audio started,
+      // producing an echo / doubled voice.
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current = null;
       }
       if (abortRef.current) {
         abortRef.current.abort();
+      }
+      if (typeof window !== "undefined" && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
       }
 
       setSpeaking(true);

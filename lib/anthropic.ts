@@ -252,8 +252,17 @@ CRITICAL RULES:
 
 function buildMessages(
   sentence: string,
-  conversationContext: string
+  conversationContext: string,
+  coachLanguage?: string
 ): { role: "user" | "assistant"; content: string }[] {
+  // Per-turn language reminder at the user-message level. System-level
+  // instructions get softened by long conversations; message-level
+  // reinforcement keeps the response locked to the chosen language,
+  // especially on smaller/faster models (Haiku) used in the voice path.
+  const langReminder = coachLanguage
+    ? `\n\nREMINDER — language for your reply: write your coachMessage and nextPrompt in **${coachLanguage}**. Do not use any other language. Quote German words as German, but the framing is in ${coachLanguage}.`
+    : "";
+
   return [
     ...(conversationContext
       ? [{ role: "user" as const, content: `Previous conversation:\n${conversationContext}` },
@@ -261,7 +270,7 @@ function buildMessages(
       : []),
     {
       role: "user" as const,
-      content: `Analyze this sentence: "${sentence}"`,
+      content: `Analyze this sentence: "${sentence}"${langReminder}`,
     },
   ];
 }
@@ -277,7 +286,7 @@ export async function* streamAnalyzeForConversation(
 ): AsyncGenerator<{ type: "token"; text: string } | { type: "coachDone"; text: string } | { type: "analysis"; data: APIAnalysisResult }> {
   const model = selectModel(learnerContext);
   const systemPrompt = buildConversationPrompt(nativeLanguage, targetStructureId, learnerContext);
-  const messages = buildMessages(sentence, conversationContext);
+  const messages = buildMessages(sentence, conversationContext, learnerContext?.coachLanguage);
 
   const stream = anthropic.messages.stream({
     model,
@@ -391,7 +400,7 @@ export async function analyzeForConversation(
 ): Promise<APIAnalysisResult> {
   const model = selectModel(learnerContext, opts);
   const systemPrompt = buildConversationPrompt(nativeLanguage, targetStructureId, learnerContext);
-  const messages = buildMessages(sentence, conversationContext);
+  const messages = buildMessages(sentence, conversationContext, learnerContext?.coachLanguage);
 
   const message = await anthropic.messages.create({
     model,
@@ -405,16 +414,59 @@ export async function analyzeForConversation(
     throw new Error("Unexpected response type from Anthropic API");
   }
 
-  // Handle two-part format
   const text = content.text;
+  const fallbackLevel = (learnerContext?.detectedLevel ?? "A1") as CefrLevel;
+
+  // Happy path: two-part format with <<<ANALYSIS>>> delimiter
   const delimIdx = text.indexOf("<<<ANALYSIS>>>");
   if (delimIdx !== -1) {
     const coachMessage = text.slice(0, delimIdx).trim();
     const jsonPart = text.slice(delimIdx + "<<<ANALYSIS>>>".length).trim();
-    const analysis = safeParseJSON<Omit<APIAnalysisResult, "coachMessage">>(jsonPart);
-    return { ...analysis, coachMessage } as APIAnalysisResult;
+    try {
+      const analysis = safeParseJSON<Omit<APIAnalysisResult, "coachMessage">>(jsonPart);
+      return { ...analysis, coachMessage } as APIAnalysisResult;
+    } catch (err) {
+      // Parse failed — log raw response so we can see what Claude returned
+      // in Vercel logs, and degrade gracefully so the caller (voice tool
+      // path) still surfaces the coach message to the learner.
+      console.warn(
+        "[anthropic] analysis JSON parse failed, using coachMessage-only fallback:",
+        err instanceof Error ? err.message : String(err),
+        "\nRaw JSON part:",
+        jsonPart.slice(0, 500)
+      );
+      return {
+        tokens: [],
+        score: 70,
+        errorTypes: [],
+        detectedLevel: fallbackLevel,
+        structuresUsed: [],
+        errors: [],
+        coachMessage,
+        nextPrompt: "",
+      };
+    }
   }
 
-  // Fallback to old pure-JSON format
-  return safeParseJSON(text);
+  // Legacy/pure-JSON path
+  try {
+    return safeParseJSON(text);
+  } catch (err) {
+    console.warn(
+      "[anthropic] pure-JSON parse failed, using plain-text fallback:",
+      err instanceof Error ? err.message : String(err),
+      "\nRaw response:",
+      text.slice(0, 500)
+    );
+    return {
+      tokens: [],
+      score: 70,
+      errorTypes: [],
+      detectedLevel: fallbackLevel,
+      structuresUsed: [],
+      errors: [],
+      coachMessage: text.trim(),
+      nextPrompt: "",
+    };
+  }
 }
