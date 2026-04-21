@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { REALTIME_TOOLS } from "@/lib/realtimeTools";
+import { buildRealtimeInstructions } from "@/lib/realtimeInstructions";
 import { LearnerModel } from "@/types";
 import { getUserFromRequest, getSupabaseAdmin } from "@/lib/supabaseServer";
+
+// Claude analysis can sometimes take several seconds; give the route room
+// so Vercel doesn't kill us at the default 10s on hobby.
+// Honored on Pro (up to 60s), clamped down on hobby automatically.
+export const maxDuration = 60;
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -86,40 +92,18 @@ export async function POST(request: NextRequest) {
       learnerModel: LearnerModel;
     };
 
-    const coachLang =
+    const coachLanguage =
       learnerModel?.coachLanguage ??
       learnerModel?.nativeLanguage ??
       "English";
     const level = learnerModel?.detectedLevel ?? "A1";
-    const nativeLang = learnerModel?.nativeLanguage ?? "English";
+    const nativeLanguage = learnerModel?.nativeLanguage ?? "English";
 
-    const instructions = `You are the voice of GrammarCoach — a warm, skilled German language tutor having a real-time spoken conversation with a learner.
-
-The learner's native language is ${nativeLang}. Their current level is roughly ${level}. Respond in ${coachLang} unless they ask to switch.
-
-YOUR ROLE:
-- Be a warm, encouraging conversation partner — like a friend who happens to be great at German
-- ALWAYS call the analyze_german_sentence tool when the learner says something in German
-- Base your spoken response on the coachMessage from the tool result — do NOT invent grammar corrections
-- Add natural warmth around the tool's corrections
-
-AT THE START:
-- Call get_session_context to learn about the student and get your opening message
-- Speak the opener naturally
-
-SPEECH STYLE:
-- Speak naturally — this is a conversation, not a lecture
-- Keep each reply SHORT — 1–2 sentences. Let the learner breathe.
-- When correcting, say the correct form clearly: "It's 'mit meinem Freund' — after 'mit' we use Dativ"
-- Celebrate when they get something right that they struggled with before
-- Match your language complexity to their level (${level})
-
-CRITICAL — PACING:
-- After you deliver a correction or feedback, STOP SPEAKING. Do NOT chain a follow-up question onto the same reply.
-- Do NOT read the tool's nextPrompt aloud — it is shown to the learner visually so they can read and choose when to continue.
-- The learner needs silent time to read the correction card, scroll back, and absorb. Give it to them.
-- Wait in silence for the learner to speak next. They will speak when they're ready.
-- If the learner asks you a direct question, answer briefly and then stop again.`;
+    const instructions = buildRealtimeInstructions({
+      nativeLanguage,
+      coachLanguage,
+      level,
+    });
 
     const session = await openai.beta.realtime.sessions.create({
       model: "gpt-4o-realtime-preview-2025-06-03",

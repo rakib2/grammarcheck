@@ -109,7 +109,14 @@ export interface LearnerContext {
 
 // ── Model selection: Haiku for simple, Sonnet for complex ──
 
-export function selectModel(learnerContext?: LearnerContext): string {
+export function selectModel(
+  learnerContext?: LearnerContext,
+  opts: { preferFast?: boolean } = {}
+): string {
+  // Voice path forces Haiku — latency matters more than nuance, and Vercel
+  // function timeouts kill the voice UI if Claude takes too long.
+  if (opts.preferFast) return "claude-haiku-4-5-20251001";
+
   if (!learnerContext) return "claude-sonnet-4-20250514";
 
   // Use fast Haiku when learner is doing well
@@ -173,7 +180,12 @@ The learner's native language is ${nativeLanguage}. Their current level is rough
 ${targetHint}
 ${learnerSummary}
 
-RESPONSE LANGUAGE: Write your coachMessage and nextPrompt in **${coachLang}**. Grammar terms (like "Dativ", "Akkusativ") stay in German. If the user asks you to switch language (e.g., "answer in Bengali", "auf Deutsch antworten"), adapt immediately.
+RESPONSE LANGUAGE — ABSOLUTE RULE:
+- Write your coachMessage and nextPrompt in **${coachLang}**. NO EXCEPTIONS.
+- The learner is practicing German, so they will write German to you. You do NOT mirror their language — you respond in ${coachLang}.
+- Grammar terms ("Dativ", "Akkusativ", "Nominativ") stay as German words. Quote corrected German sentences as German ("It should be 'mit meinem Freund'"). But the framing and explanation around them are in ${coachLang}.
+- Do NOT drift into English or German just because those words appear in the sentence you're analyzing. Stay in ${coachLang}.
+- Switch language ONLY if the learner explicitly asks in-message (e.g. "answer in Bengali", "auf Deutsch erklären"). Otherwise stay in ${coachLang} every single turn.
 
 HOW TO RESPOND — think like a human tutor in a 1-on-1 lesson:
 
@@ -374,9 +386,10 @@ export async function analyzeForConversation(
   nativeLanguage: string,
   targetStructureId: string | null,
   conversationContext: string,
-  learnerContext?: LearnerContext
+  learnerContext?: LearnerContext,
+  opts: { preferFast?: boolean } = {}
 ): Promise<APIAnalysisResult> {
-  const model = selectModel(learnerContext);
+  const model = selectModel(learnerContext, opts);
   const systemPrompt = buildConversationPrompt(nativeLanguage, targetStructureId, learnerContext);
   const messages = buildMessages(sentence, conversationContext);
 

@@ -150,6 +150,37 @@ export function useRealtimeVoice(
       sendEvent({ type: "response.create" });
     } catch (err) {
       console.error("Tool call failed:", err);
+
+      // Commit a placeholder turn so the UI shows SOMETHING rather than
+      // staying blank. The learner hears the coach's fallback audio but
+      // previously had no written signal that their sentence landed.
+      if (name === "analyze_german_sentence") {
+        try {
+          const parsedArgs = JSON.parse(args) as { sentence?: string };
+          const sentence = parsedArgs.sentence ?? "(couldn't transcribe)";
+          const convState = convStateRef.current;
+          const model = learnerModelRef.current;
+          callbacksRef.current.onTurnAnalysis?.({
+            sentence,
+            responseText:
+              "(Analysis couldn't complete in time. I heard you — keep going.)",
+            score: 0,
+            detectedLevel: model?.detectedLevel ?? "A1",
+            tokens: [],
+            corrections: [],
+            ruleCard: null,
+            activeRule: null,
+            deepPracticeNudge: null,
+            lessonSuggestion: null,
+            nextPrompt: "",
+            focusStructure: convState?.focusStructure ?? null,
+            errorStructureIds: [],
+          });
+        } catch {
+          // Best-effort fallback — ignore if args can't be parsed
+        }
+      }
+
       // Send error result so the model can recover
       sendEvent({
         type: "conversation.item.create",

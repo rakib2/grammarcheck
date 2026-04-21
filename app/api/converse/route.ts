@@ -8,6 +8,10 @@ import {
 } from "@/lib/conversationEngine";
 import { LearnerModel, ConversationState } from "@/types";
 
+// Streaming Claude responses can take 10+ seconds for complex learners.
+// Clamped to 10s on hobby, honored up to 60s on Vercel Pro.
+export const maxDuration = 60;
+
 /**
  * POST /api/converse
  *

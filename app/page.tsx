@@ -10,6 +10,7 @@ import SpeakButton from "@/components/SpeakButton";
 import { useSpeech } from "@/lib/useSpeech";
 import { useRealtimeVoice, RealtimeState } from "@/lib/useRealtimeVoice";
 import { VoiceTurnAnalysis } from "@/lib/realtimeTools";
+import { buildRealtimeInstructions } from "@/lib/realtimeInstructions";
 import { Token, LearnerModel, ConversationState, CefrLevel, CorrectionLevel } from "@/types";
 import AuthGuard from "@/components/AuthGuard";
 import { useAuth } from "@/lib/AuthContext";
@@ -369,6 +370,44 @@ function HomeContent() {
       announcedDrillsRef.current = new Set();
     }
   }, [realtimeMode]);
+
+  // ── Live language switch during voice chat ──
+  // When the learner changes the coach language dropdown mid-conversation,
+  // rebuild the Realtime session instructions and push them so GPT-4o
+  // switches immediately instead of sticking with the language it was
+  // born with. Also rebuilds if native language or level changes.
+  const coachLanguage = learnerModel?.coachLanguage ?? learnerModel?.nativeLanguage ?? null;
+  const nativeLanguage = learnerModel?.nativeLanguage ?? null;
+  const detectedLevel = learnerModel?.detectedLevel ?? null;
+  const lastPushedLanguageRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!realtimeMode) {
+      lastPushedLanguageRef.current = null;
+      return;
+    }
+    if (realtime.state === "idle" || realtime.state === "connecting") return;
+    if (!coachLanguage || !nativeLanguage || !detectedLevel) return;
+
+    // Skip the first push — the session was created with these exact values
+    // baked in. Only send session.update on ACTUAL changes.
+    if (lastPushedLanguageRef.current === null) {
+      lastPushedLanguageRef.current = coachLanguage;
+      return;
+    }
+    if (lastPushedLanguageRef.current === coachLanguage) return;
+
+    realtime.sendEvent({
+      type: "session.update",
+      session: {
+        instructions: buildRealtimeInstructions({
+          nativeLanguage,
+          coachLanguage,
+          level: detectedLevel,
+        }),
+      },
+    });
+    lastPushedLanguageRef.current = coachLanguage;
+  }, [coachLanguage, nativeLanguage, detectedLevel, realtimeMode, realtime]);
 
   // Load voice choice preference
   useEffect(() => {

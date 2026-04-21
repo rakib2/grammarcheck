@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { executeTool } from "@/lib/realtimeTools";
 import { LearnerModel, ConversationState } from "@/types";
 
+// Give Claude analysis plenty of room before Vercel kills the request.
+// On hobby this is clamped to 10s; on Pro we get the full 60s.
+export const maxDuration = 60;
+
 /**
  * POST /api/realtime/tool
  *

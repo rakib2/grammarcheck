@@ -160,13 +160,16 @@ async function executeAnalyze(
     focusDrilling,
   };
 
-  // Call Claude for grammar analysis
+  // Call Claude for grammar analysis. Voice path forces Haiku so the turn
+  // stays well under Vercel's function timeout — slow analysis is the #1
+  // reason the voice UI ends up without a structured breakdown.
   const analysis: APIAnalysisResult = await analyzeForConversation(
     sentence,
     learnerModel.nativeLanguage,
     conversationState.currentTarget,
     contextStr,
-    learnerContext
+    learnerContext,
+    { preferFast: true }
   );
 
   // Run ACL engine to update learner model
