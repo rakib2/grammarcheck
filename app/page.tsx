@@ -1098,9 +1098,11 @@ function HomeContent() {
                       </div>
 
                       {/* Coach card: score + response.
-                          When this IS the latest turn and the coach is actively
-                          speaking it, show a soft pulsing ring so the learner
-                          knows which card the audio is coming from. */}
+                          When this is the latest turn and the coach is actively
+                          speaking it, split the text into sentences and track
+                          progress via audio_transcript length. Past sentences
+                          fade, the current one gets a soft highlight — so the
+                          learner can see which section the voice is on. */}
                       <div className="flex gap-3">
                         <div className="score-pop">
                           <ScoreRing score={turn.score} size={44} />
@@ -1112,14 +1114,66 @@ function HomeContent() {
                               : "ring-1 ring-gray-100"
                           }`}
                         >
-                          <div className="whitespace-pre-wrap" dangerouslySetInnerHTML={{
-                            __html: safeMarkdown(turn.responseText)
-                          }} />
+                          {(() => {
+                            const content = turn.responseText;
+                            const isSpeakingHere = isLast && realtime.state === "speaking";
+                            const spokenChars = isSpeakingHere ? realtimeModelText.length : null;
+
+                            // Split on sentence-ending punctuation (keep trailing whitespace
+                            // in the chunk so we don't re-collapse spacing). Fallback to
+                            // the whole thing if the regex matches nothing weird.
+                            const sentences = content.match(/[^.!?\n]+[.!?]+[\s\n]*|[^.!?\n]+$/g) ?? [content];
+
+                            // Running char position for each sentence's start
+                            const positions: number[] = [];
+                            let pos = 0;
+                            for (const s of sentences) {
+                              positions.push(pos);
+                              pos += s.length;
+                            }
+
+                            // Which sentence is the transcript currently in?
+                            let currentIdx = -1;
+                            if (spokenChars !== null) {
+                              for (let i = sentences.length - 1; i >= 0; i--) {
+                                if (positions[i] <= spokenChars) {
+                                  currentIdx = i;
+                                  break;
+                                }
+                              }
+                            }
+
+                            return (
+                              <div className="whitespace-pre-wrap">
+                                {sentences.map((s, i) => {
+                                  const state =
+                                    spokenChars === null ? "static" :
+                                    i < currentIdx ? "past" :
+                                    i === currentIdx ? "current" :
+                                    "future";
+                                  const cls =
+                                    state === "current"
+                                      ? "rounded bg-blue-50 px-0.5 transition-colors"
+                                      : state === "past"
+                                      ? "text-gray-400 transition-colors"
+                                      : "";
+                                  return (
+                                    <span
+                                      key={i}
+                                      className={cls}
+                                      dangerouslySetInnerHTML={{ __html: safeMarkdown(s) }}
+                                    />
+                                  );
+                                })}
+                              </div>
+                            );
+                          })()}
+
                           {isLast && realtime.state === "speaking" && (
                             <div className="mt-2 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-blue-500">
-                              <span className="flex h-1.5 w-1.5">
-                                <span className="absolute h-1.5 w-1.5 animate-ping rounded-full bg-blue-400 opacity-75" />
-                                <span className="relative h-1.5 w-1.5 rounded-full bg-blue-500" />
+                              <span className="relative flex h-1.5 w-1.5">
+                                <span className="absolute inline-flex h-1.5 w-1.5 animate-ping rounded-full bg-blue-400 opacity-75" />
+                                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-blue-500" />
                               </span>
                               Speaking now
                             </div>
@@ -1220,13 +1274,13 @@ function HomeContent() {
                       )}
 
                       {/* Try-next suggestion — visual only. Coach does NOT speak this;
-                          the learner decides when they're ready to respond. */}
+                          the learner decides when they're ready to respond. The
+                          nextPrompt comes from Claude in the coach language, so we
+                          avoid any hard-coded English label here. */}
                       {isLast && turn.nextPrompt && (
-                        <div className="fade-in-up rounded-lg border border-dashed border-gray-300 bg-gray-50 px-3 py-2.5">
-                          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
-                            Try next — when you&apos;re ready
-                          </p>
-                          <p className="text-sm text-gray-600">{turn.nextPrompt}</p>
+                        <div className="fade-in-up flex items-start gap-2 rounded-lg border border-dashed border-gray-300 bg-gray-50 px-3 py-2.5">
+                          <span className="mt-0.5 text-gray-400">&#8250;</span>
+                          <p className="flex-1 text-sm text-gray-600">{turn.nextPrompt}</p>
                         </div>
                       )}
                     </div>
