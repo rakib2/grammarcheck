@@ -170,9 +170,10 @@ function HomeContent() {
   const pendingPromptRef = useRef<string | null>(null);
   const sessionStartModelRef = useRef<LearnerModel | null>(null);
 
-  // Speech synthesis — auto-speaks all coach responses
-  const { speak, stop, speaking, supported: ttsSupported } = useSpeech({
+  // Speech synthesis — streams coach responses sentence-by-sentence via enqueue()
+  const { speak, enqueue: enqueueSpeech, stop, speaking, supported: ttsSupported } = useSpeech({
     voice: voiceChoice,
+    language: learnerModel?.coachLanguage ?? undefined,
     onEnd: () => {
       // Speak queued follow-up prompt (nextPrompt) after coach message finishes
       if (pendingPromptRef.current) {
@@ -537,6 +538,39 @@ function HomeContent() {
       const decoder = new TextDecoder();
       let buffer = "";
 
+      // Sentence-by-sentence TTS: as coach tokens stream in, enqueue each
+      // completed sentence so audio starts well before the full message lands.
+      // Only advance `spokenUpTo` when we accept a chunk, so partial sentences
+      // (and mid-abbreviation dots like "z.B.") stay buffered for later tokens.
+      let fullCoachText = "";
+      let spokenUpTo = 0;
+      const MIN_CHUNK_LEN = 20; // skip tiny chunks to avoid "z.B." splits
+
+      const flushCompleteSentences = (atEnd: boolean) => {
+        let lastEnd = spokenUpTo;
+        for (let i = spokenUpTo; i < fullCoachText.length; i++) {
+          const ch = fullCoachText[i];
+          if (ch === "." || ch === "!" || ch === "?" || ch === "…") {
+            const next = fullCoachText[i + 1];
+            const isBoundary = next === undefined || /\s/.test(next);
+            if (!isBoundary) continue;
+            const candidate = fullCoachText.slice(lastEnd, i + 1).trim();
+            if (candidate.length >= MIN_CHUNK_LEN) {
+              enqueueSpeech(candidate);
+              lastEnd = i + 1;
+            }
+          }
+        }
+        spokenUpTo = lastEnd;
+        if (atEnd) {
+          const tail = fullCoachText.slice(spokenUpTo).trim();
+          if (tail) {
+            enqueueSpeech(tail);
+            spokenUpTo = fullCoachText.length;
+          }
+        }
+      };
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -551,11 +585,13 @@ function HomeContent() {
             const event = JSON.parse(line);
 
             if (event.type === "token") {
-              setStreamingText((prev) => prev + event.text);
+              fullCoachText += event.text;
+              setStreamingText(fullCoachText);
+              flushCompleteSentences(false);
             } else if (event.type === "coachDone") {
+              fullCoachText = event.text;
               setStreamingText(event.text);
-              // Auto-speak coach response
-              speak(event.text);
+              flushCompleteSentences(true);
             } else if (event.type === "analysis") {
               const result: ConverseTurnResult = event.data;
               setTurns((prev) => [...prev, { sentence: text, result }]);
