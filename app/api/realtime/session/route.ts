@@ -143,8 +143,13 @@ export async function POST(request: NextRequest) {
       instructions,
       input_audio_transcription: {
         model: "gpt-4o-transcribe",
-        language: "de",
-        prompt: "German language practice conversation with a learner",
+        // Deliberately NOT setting language — the learner may speak German
+        // mixed with occasional words from their native language, and forcing
+        // `language: "de"` causes the transcriber to hallucinate German
+        // phrases from silence / background noise / non-German words.
+        // Auto-detect is more accurate in mixed-language scenarios.
+        prompt:
+          "A learner is practicing a foreign language. They may speak in German, in their native tongue, or a mix. Transcribe exactly what you hear — do not guess or fill gaps with likely phrases.",
       },
       turn_detection: {
         type: "semantic_vad",
