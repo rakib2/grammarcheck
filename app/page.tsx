@@ -1032,7 +1032,8 @@ function HomeContent() {
           "bg-gray-100 text-gray-500";
 
         return (
-          <div className="flex flex-1 flex-col overflow-hidden bg-gray-50">
+          <div className="flex flex-1 overflow-hidden bg-gray-50">
+          <div className="flex flex-1 flex-col overflow-hidden">
             {/* Compact header: state pill + focus badge */}
             <div className="border-b border-gray-200 bg-white px-6 py-3">
               <div className="mx-auto flex max-w-2xl items-center gap-3">
@@ -1096,15 +1097,33 @@ function HomeContent() {
                         </div>
                       </div>
 
-                      {/* Coach card: score + response */}
+                      {/* Coach card: score + response.
+                          When this IS the latest turn and the coach is actively
+                          speaking it, show a soft pulsing ring so the learner
+                          knows which card the audio is coming from. */}
                       <div className="flex gap-3">
                         <div className="score-pop">
                           <ScoreRing score={turn.score} size={44} />
                         </div>
-                        <div className="flex-1 rounded-2xl rounded-bl-md bg-white px-4 py-3 text-sm text-gray-700 ring-1 ring-gray-100">
+                        <div
+                          className={`flex-1 rounded-2xl rounded-bl-md bg-white px-4 py-3 text-sm text-gray-700 transition-all duration-300 ${
+                            isLast && realtime.state === "speaking"
+                              ? "ring-2 ring-blue-300 shadow-md"
+                              : "ring-1 ring-gray-100"
+                          }`}
+                        >
                           <div className="whitespace-pre-wrap" dangerouslySetInnerHTML={{
                             __html: safeMarkdown(turn.responseText)
                           }} />
+                          {isLast && realtime.state === "speaking" && (
+                            <div className="mt-2 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-blue-500">
+                              <span className="flex h-1.5 w-1.5">
+                                <span className="absolute h-1.5 w-1.5 animate-ping rounded-full bg-blue-400 opacity-75" />
+                                <span className="relative h-1.5 w-1.5 rounded-full bg-blue-500" />
+                              </span>
+                              Speaking now
+                            </div>
+                          )}
                         </div>
                       </div>
 
@@ -1239,11 +1258,17 @@ function HomeContent() {
                   </div>
                 )}
 
-                {/* Transient live coach text while speaking, before a turn commits */}
+                {/* Live transcription of what the coach is currently saying —
+                    accumulates via response.audio_transcript.delta and sits
+                    directly under the last turn card so the learner can see
+                    the spoken text unfold in real time. */}
                 {realtimeModelText && realtime.state === "speaking" && (
                   <div className="fade-in-up flex gap-3">
                     <div className="w-[44px]" />
-                    <div className="flex-1 rounded-2xl rounded-bl-md bg-white px-4 py-3 text-sm text-gray-700 ring-1 ring-gray-100">
+                    <div className="flex-1 rounded-lg border border-dashed border-blue-200 bg-blue-50/40 px-3 py-2 text-[13px] italic text-blue-700/80">
+                      <span className="mr-2 text-[10px] font-semibold uppercase not-italic tracking-wider text-blue-400">
+                        Live
+                      </span>
                       {realtimeModelText}
                     </div>
                   </div>
@@ -1252,6 +1277,83 @@ function HomeContent() {
                 <div ref={voiceScrollRef} />
               </div>
             </div>
+          </div>
+
+          {/* Voice-mode right rail — muted mirror of quick-practice sidebar.
+              Same data (weak structures, frequent mistakes, active rule),
+              calmer styling so it doesn't compete with the conversation.
+              Desktop-only to keep mobile immersive. */}
+          <aside className="hidden lg:flex w-60 shrink-0 flex-col border-l border-gray-200 bg-white/70 overflow-y-auto">
+            <div className="px-4 py-4 space-y-5">
+              {/* Active rule (muted) */}
+              {voiceActiveRule && (
+                <div className="rounded-lg border border-gray-100 bg-gray-50/50 p-3 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <p className="text-[9px] font-semibold uppercase tracking-wider text-gray-400">
+                      {voiceActiveRule.structureId === convState?.focusStructure ? "Drilling" : "Current rule"}
+                    </p>
+                    <span className="text-[9px] text-gray-400">
+                      {Math.round(voiceActiveRule.mastery * 100)}%
+                    </span>
+                  </div>
+                  <p className="text-xs font-medium text-gray-700">{voiceActiveRule.structureName}</p>
+                  <p className="text-[11px] text-gray-500 leading-snug">{voiceActiveRule.description}</p>
+                </div>
+              )}
+
+              {/* Weak areas */}
+              {weakList.length > 0 && (
+                <div>
+                  <p className="text-[9px] font-medium uppercase tracking-wider text-gray-400 mb-2">
+                    Focus areas
+                  </p>
+                  <div className="space-y-1.5">
+                    {weakList.map((s) => (
+                      <div key={s.id} className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] text-gray-500 truncate">{s.name}</span>
+                          <span className="text-[9px] text-gray-400">{Math.round(s.mastery * 100)}%</span>
+                        </div>
+                        <div className="h-0.5 w-full rounded-full bg-gray-100">
+                          <div
+                            className="h-full rounded-full bg-gray-300 transition-all"
+                            style={{ width: `${Math.max(Math.round(s.mastery * 100), 2)}%` }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Frequent mistakes */}
+              {topMistakes.length > 0 && (
+                <div>
+                  <p className="text-[9px] font-medium uppercase tracking-wider text-gray-400 mb-2">
+                    Frequent mistakes
+                  </p>
+                  <div className="space-y-2">
+                    {topMistakes.map((err) => (
+                      <div key={err.id} className="text-[11px]">
+                        <div className="flex items-baseline gap-1.5">
+                          <span className="text-red-400 line-through">{err.example}</span>
+                          <span className="text-gray-300">&rarr;</span>
+                          <span className="text-green-500">{err.correction}</span>
+                        </div>
+                        <p className="text-[9px] text-gray-400">{err.count}x</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {weakList.length === 0 && topMistakes.length === 0 && (
+                <p className="text-[11px] text-gray-400 italic">
+                  Your weak areas and frequent mistakes will show up here as you practice.
+                </p>
+              )}
+            </div>
+          </aside>
           </div>
         );
       })()}
