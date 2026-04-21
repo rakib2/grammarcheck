@@ -470,93 +470,27 @@ function buildCorrectionResponse(
 // ───────────────────────────────────────────────────────────────
 
 function determineNextPrompt(
-  srsQueue: LearnerModel["spacedRepetitionQueue"],
-  structures: GrammarStructure[],
-  state: ConversationState,
-  model: LearnerModel,
-  currentTurn: number,
+  _srsQueue: LearnerModel["spacedRepetitionQueue"],
+  _structures: GrammarStructure[],
+  _state: ConversationState,
+  _model: LearnerModel,
+  _currentTurn: number,
   fallbackPrompt: string
 ): string {
-  // Prefer Claude's AI-generated prompt — it already knows the target structure
-  // and generates varied, conversational questions that elicit the right grammar.
-
-  // 0. Focus drilling — if we're drilling a specific structure, stay on it
-  // The AI prompt should already target this (via currentTarget in system prompt)
-  // but if the AI prompt is empty, use hardcoded prompts
-  if (state.focusStructure && state.focusRemaining > 0) {
-    if (fallbackPrompt && fallbackPrompt.trim()) {
-      return fallbackPrompt; // AI already knows the target
-    }
-    const focusDef = getStructureById(state.focusStructure);
-    if (focusDef) {
-      const prompts = focusDef.elicitingPrompts;
-      const unused = prompts.filter((p) => !state.turns.some((t) => t.text === p));
-      return unused.length > 0
-        ? unused[Math.floor(Math.random() * unused.length)]
-        : prompts[Math.floor(Math.random() * prompts.length)];
-    }
-  }
-
-  // 1. Check SRS queue for due items
-  const dueItems = getDueItems(srsQueue, currentTurn);
-  if (dueItems.length > 0) {
-    const targetStructure = getStructureById(dueItems[0].structureId);
-    if (targetStructure) {
-      // Use AI prompt most of the time — it already knows the target structure
-      // and generates varied, conversational questions
-      if (fallbackPrompt && fallbackPrompt.trim()) {
-        return fallbackPrompt;
-      }
-      // AI prompt empty — use hardcoded as safety net
-      const prompts = targetStructure.elicitingPrompts;
-      const unused = prompts.filter(
-        (p) => !state.turns.some((t) => t.text === p)
-      );
-      return unused.length > 0
-        ? unused[Math.floor(Math.random() * unused.length)]
-        : prompts[Math.floor(Math.random() * prompts.length)];
-    }
-  }
-
-  // 2. Target weakest known structure — same logic, prefer AI prompt
-  const weakest = structures
-    .filter((s) => s.attempts > 0 && s.mastery < 0.6)
-    .sort((a, b) => a.mastery - b.mastery)[0];
-
-  if (weakest) {
-    if (fallbackPrompt && fallbackPrompt.trim()) {
-      return fallbackPrompt;
-    }
-    const structDef = getStructureById(weakest.id);
-    if (structDef) {
-      const prompts = structDef.elicitingPrompts;
-      const unused = prompts.filter(
-        (p) => !state.turns.some((t) => t.text === p)
-      );
-      return unused.length > 0
-        ? unused[Math.floor(Math.random() * unused.length)]
-        : prompts[Math.floor(Math.random() * prompts.length)];
-    }
-  }
-
-  // 3. Introduce something new at i+1 (one level above comfort)
-  const levelOrder: CefrLevel[] = ["A1", "A2", "B1", "B2", "C1", "C2"];
-  const currentLevelIdx = levelOrder.indexOf(model.detectedLevel);
-  const targetLevel = levelOrder[Math.min(currentLevelIdx + 1, levelOrder.length - 1)];
-
-  const newStructures = GRAMMAR_STRUCTURES.filter(
-    (s) => s.cefrLevel === targetLevel && !structures.find((known) => known.id === s.id)
-  );
-
-  if (newStructures.length > 0) {
-    // For first encounter, use hardcoded prompt to guarantee the structure is elicited
-    const target = newStructures[0];
-    const prompts = target.elicitingPrompts;
-    return prompts[Math.floor(Math.random() * prompts.length)];
-  }
-
-  // 4. Fallback to AI-generated prompt
-  return fallbackPrompt;
+  // Trust the AI. Claude already receives the focus structure, SRS due
+  // items, weak structures, and coach language via the system prompt —
+  // so its nextPrompt is contextual, in the right language, and varied.
+  //
+  // The old hardcoded elicitingPrompts (from grammarStructures.ts) were
+  // English-only, so returning them broke the coach-language experience
+  // whenever Claude's prompt was empty or a new structure was introduced.
+  //
+  // New policy: use Claude's prompt when non-empty, return "" otherwise.
+  // The UI hides the "Try next" chip on empty — the learner sees nothing
+  // rather than a stale English hardcoded sentence, and is free to drive
+  // the conversation themselves. Much more natural than being pushed
+  // toward a disconnected hardcoded topic.
+  return fallbackPrompt?.trim() ?? "";
 }
 
 // ───────────────────────────────────────────────────────────────
