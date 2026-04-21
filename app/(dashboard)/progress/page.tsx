@@ -6,6 +6,8 @@ import { supabase } from "@/lib/supabase";
 import { CURRICULUM, CEFR_LEVELS } from "@/lib/curriculum";
 import { CefrLevel, UserLessonProgress, LearnerModel, ErrorPattern } from "@/types";
 import { generateLearningPath, PathItem, getLessonForStructure } from "@/lib/learningPath";
+import { useAuth } from "@/lib/AuthContext";
+import { loadLearnerModel } from "@/lib/learnerModelSync";
 import {
   loadSnapshots,
   loadSummaries,
@@ -16,18 +18,10 @@ import {
   PersistentErrorAlert,
 } from "@/lib/sessionMemory";
 
-const STORAGE_KEY = "grammarcoach_learner_model";
-
-function loadModel(): LearnerModel | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch { return null; }
-}
-
 export default function ProgressPage() {
   const router = useRouter();
+  const auth = useAuth();
+  const userId = auth.user?.id ?? null;
   const [progress, setProgress] = useState<Record<string, UserLessonProgress>>({});
   const [learnerModel, setLearnerModel] = useState<LearnerModel | null>(null);
   const [learningPath, setLearningPath] = useState<PathItem[]>([]);
@@ -40,10 +34,11 @@ export default function ProgressPage() {
 
   useEffect(() => {
     async function load() {
+      if (auth.loading) return;
       setLoading(true);
 
-      // Load learner model from localStorage
-      const model = loadModel();
+      // Source of truth: Supabase for signed-in users, localStorage fallback.
+      const model = await loadLearnerModel(userId);
       if (model) {
         setLearnerModel(model);
         setLearningPath(generateLearningPath(model));
@@ -88,7 +83,7 @@ export default function ProgressPage() {
       setLoading(false);
     }
     load();
-  }, []);
+  }, [userId, auth.loading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const totalCompleted = Object.values(progress).filter((p) => p.status === "completed").length;
   const weakItems = learningPath.filter((p) => p.status === "weak");

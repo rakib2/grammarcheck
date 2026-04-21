@@ -8,8 +8,10 @@ import RuleCard from "@/components/RuleCard";
 import SpeechButton from "@/components/SpeechButton";
 import PhaseIndicator from "@/components/PhaseIndicator";
 import LessonComplete from "@/components/LessonComplete";
-import { GrammarAnalysis, LessonPhase, CurriculumLesson, Token, LearnerModel } from "@/types";
+import { GrammarAnalysis, LessonPhase, CurriculumLesson, Token } from "@/types";
 import { getLessonById, getNextLesson } from "@/lib/curriculum";
+import { useAuth } from "@/lib/AuthContext";
+import { loadLearnerModel, saveLearnerModel } from "@/lib/learnerModelSync";
 import {
   getTeachMessages,
   getDrillPrompt,
@@ -19,25 +21,17 @@ import {
   calculateDrillScore,
 } from "@/lib/lessonEngine";
 
-const STORAGE_KEY = "grammarcoach_learner_model";
-
-function loadModel(): LearnerModel | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch { return null; }
-}
-
-function saveModel(model: LearnerModel) {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(model));
-}
-
-/** Sync a lesson score back into the shared learnerModel */
-function syncLessonScore(lessonId: string, structureId: string | null, score: number) {
-  const model = loadModel();
-  if (!model || !structureId) return;
+/** Sync a lesson score back into the shared learner model.
+ *  Supabase-aware: reads/writes via the sync helpers so cross-device state
+ *  stays consistent when the learner finishes a focused lesson. */
+async function syncLessonScore(
+  structureId: string | null,
+  score: number,
+  userId: string | null
+): Promise<void> {
+  if (!structureId) return;
+  const model = await loadLearnerModel(userId);
+  if (!model) return;
 
   const mastery = score / 100;
   const alpha = 0.3;
@@ -61,7 +55,7 @@ function syncLessonScore(lessonId: string, structureId: string | null, score: nu
   }
 
   model.updatedAt = new Date().toISOString();
-  saveModel(model);
+  await saveLearnerModel(model, userId);
 }
 
 const FREE_TOPICS = ["Akkusativ", "Dativ", "Adjektiv", "Genitiv", "Free practice"];
@@ -74,6 +68,10 @@ type Message =
 
 function ChatPageContent() {
   const searchParams = useSearchParams();
+  const auth = useAuth();
+  const userId = auth.user?.id ?? null;
+  const userIdRef = useRef<string | null>(userId);
+  userIdRef.current = userId;
   const lessonId = searchParams.get("lesson");
   const topicParam = searchParams.get("topic");
 
@@ -113,9 +111,9 @@ function ChatPageContent() {
     if (!loading) inputRef.current?.focus();
   }, [messages, loading]);
 
-  const initializeSession = useCallback(() => {
-    // Try to load native language from learner model
-    const model = loadModel();
+  const initializeSession = useCallback(async () => {
+    // Try to load native language from learner model (Supabase-first if signed in)
+    const model = await loadLearnerModel(userIdRef.current);
     if (model?.nativeLanguage) {
       setNativeLanguage(model.nativeLanguage);
     }
@@ -131,7 +129,6 @@ function ChatPageContent() {
       setTeachSent(true);
     } else {
       if (model?.nativeLanguage) {
-        // Skip language prompt if we already know it
         setAwaitingLanguage(false);
         setMessages([{
           role: "coach",
@@ -150,8 +147,9 @@ function ChatPageContent() {
   }, [lesson, activeTopic]);
 
   useEffect(() => {
+    if (auth.loading) return;
     initializeSession();
-  }, [initializeSession]);
+  }, [initializeSession, auth.loading, userId]);
 
   // ── Lesson mode submit ──
   async function handleLessonSubmit(text: string) {
@@ -239,8 +237,8 @@ function ChatPageContent() {
         const passed = avgScore >= lesson!.passingScore;
         const next = getNextLesson(lesson!.id);
 
-        // Sync score back to shared learner model
-        syncLessonScore(lesson!.id, lesson!.grammarFocus, avgScore);
+        // Sync score back to shared learner model (Supabase-aware)
+        void syncLessonScore(lesson!.grammarFocus, avgScore, userIdRef.current);
 
         const reviewText = getReviewIntro(finalDrillScore, analysis.score, passed);
         setMessages((prev) => [

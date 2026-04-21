@@ -12,6 +12,8 @@ import { useRealtimeVoice, RealtimeState } from "@/lib/useRealtimeVoice";
 import { VoiceTurnAnalysis } from "@/lib/realtimeTools";
 import { Token, LearnerModel, ConversationState, CefrLevel, CorrectionLevel } from "@/types";
 import AuthGuard from "@/components/AuthGuard";
+import { useAuth } from "@/lib/AuthContext";
+import { loadLearnerModel, saveLearnerModel } from "@/lib/learnerModelSync";
 import {
   takeSnapshot,
   generateSessionSummary,
@@ -102,7 +104,6 @@ const LEVEL_LABELS: Record<CefrLevel, string> = {
   B2: "Upper Intermediate", C1: "Advanced", C2: "Mastery",
 };
 
-const STORAGE_KEY = "grammarcoach_learner_model";
 const VOICE_CHOICE_KEY = "grammarcoach_voice_choice";
 
 type TTSVoice = "nova" | "shimmer" | "alloy" | "echo" | "fable" | "onyx";
@@ -115,20 +116,24 @@ const VOICE_OPTIONS: { id: TTSVoice; label: string }[] = [
   { id: "onyx", label: "Onyx (deep)" },
 ];
 
-function loadModel(): LearnerModel | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch { return null; }
-}
-
-function saveModel(model: LearnerModel) {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(model));
-}
-
 function HomeContent() {
+  const auth = useAuth();
+  const userId = auth.user?.id ?? null;
+
+  // Stable refs so callbacks don't go stale when auth resolves later.
+  const userIdRef = useRef<string | null>(userId);
+  userIdRef.current = userId;
+
+  // Sync wrappers: always write local, mirror to Supabase when signed in.
+  // Load is async — callers must await or handle the promise.
+  const loadModel = useCallback(
+    () => loadLearnerModel(userIdRef.current),
+    []
+  );
+  const saveModel = useCallback((model: LearnerModel) => {
+    // Fire-and-forget so save never blocks the render loop.
+    void saveLearnerModel(model, userIdRef.current);
+  }, []);
   const router = useRouter();
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -143,6 +148,7 @@ function HomeContent() {
   const [speakingIdx, setSpeakingIdx] = useState<number | null>(null);
   const [showLangMenu, setShowLangMenu] = useState(false);
   const [showVoiceMenu, setShowVoiceMenu] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
   const [realtimeMode, setRealtimeMode] = useState(false);
   const [realtimeTranscript, setRealtimeTranscript] = useState("");
   const [realtimeModelText, setRealtimeModelText] = useState("");
@@ -373,22 +379,29 @@ function HomeContent() {
   }, []);
 
   // ── Load or initialize learner model ──
+  // Waits for auth to resolve, then pulls from Supabase for signed-in users
+  // (or localStorage fallback). Re-runs when userId changes (sign in/out).
   useEffect(() => {
-    const saved = loadModel();
-    if (saved) {
-      setLearnerModel(saved);
-      sessionStartModelRef.current = JSON.parse(JSON.stringify(saved));
-      setNeedsLanguage(false);
-      initSession(saved.nativeLanguage, saved);
-      // Load cross-session intelligence
-      const snapshots = loadSnapshots();
-      setTopicRecs(getSmartTopicRecommendations(saved, snapshots));
-      setPersistentAlerts(detectPersistentErrors(saved, snapshots));
-    } else {
-      setNeedsLanguage(true);
-      setInitializing(false);
-    }
-  }, []);
+    if (auth.loading) return;
+    let cancelled = false;
+    (async () => {
+      const saved = await loadModel();
+      if (cancelled) return;
+      if (saved) {
+        setLearnerModel(saved);
+        sessionStartModelRef.current = JSON.parse(JSON.stringify(saved));
+        setNeedsLanguage(false);
+        initSession(saved.nativeLanguage, saved);
+        const snapshots = loadSnapshots();
+        setTopicRecs(getSmartTopicRecommendations(saved, snapshots));
+        setPersistentAlerts(detectPersistentErrors(saved, snapshots));
+      } else {
+        setNeedsLanguage(true);
+        setInitializing(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [userId, auth.loading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const initSession = useCallback(async (lang: string, existingModel?: LearnerModel) => {
     try {
@@ -801,6 +814,39 @@ function HomeContent() {
           <button onClick={() => router.push("/progress")} className="text-xs text-gray-400 hover:text-gray-600">
             Overview &rarr;
           </button>
+
+          {/* User avatar + menu — only shows when a real user is signed in.
+              Skipped on localhost where AuthGuard bypasses auth for dev. */}
+          {auth.user && (
+            <div className="relative">
+              <button
+                onClick={() => setShowUserMenu((v) => !v)}
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-900 text-[11px] font-semibold text-white transition-colors hover:bg-gray-700"
+                title={auth.user.email ?? "Account"}
+                aria-label="Account menu"
+              >
+                {(auth.user.email?.[0] ?? "?").toUpperCase()}
+              </button>
+              {showUserMenu && (
+                <div className="absolute right-0 top-full z-20 mt-1 w-56 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
+                  <div className="border-b border-gray-100 px-3 py-2 text-[11px] text-gray-500">
+                    <div className="font-medium text-gray-700">Signed in as</div>
+                    <div className="truncate">{auth.user.email ?? "(no email)"}</div>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      setShowUserMenu(false);
+                      await auth.signOut();
+                      router.push("/login");
+                    }}
+                    className="block w-full px-3 py-2 text-left text-xs text-gray-600 transition-colors hover:bg-gray-50"
+                  >
+                    Sign out
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </header>
 
