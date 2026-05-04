@@ -41,6 +41,20 @@ export function getLessonForStructure(structureId: string): string | null {
   return STRUCTURE_TO_LESSON[structureId] ?? null;
 }
 
+/** Inverse of {@link getLessonForStructure}. Memoised on first call. */
+let _lessonToStructure: Record<string, string> | null = null;
+export function getStructureForLesson(lessonId: string): string | null {
+  if (!_lessonToStructure) {
+    _lessonToStructure = {};
+    for (const [structureId, lid] of Object.entries(STRUCTURE_TO_LESSON)) {
+      // Multiple structures can map to the same lesson; the first wins
+      // because it's the canonical structure that lesson teaches.
+      if (!_lessonToStructure[lid]) _lessonToStructure[lid] = structureId;
+    }
+  }
+  return _lessonToStructure[lessonId] ?? null;
+}
+
 /**
  * A single item in the personalized learning path.
  */

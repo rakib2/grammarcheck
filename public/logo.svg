@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="GrammarFlow underlined g mark">
+  <text x="60" y="78" text-anchor="middle" font-family="Fraunces, ui-serif, Georgia, serif" font-size="84" font-weight="500" fill="#15151a" text-rendering="geometricPrecision">g</text>
+  <path d="M20 100 Q40 90 60 100 T100 100" fill="none" stroke="#7fae6a" stroke-width="8" stroke-linecap="round"/>
+</svg>

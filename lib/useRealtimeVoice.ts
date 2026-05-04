@@ -20,9 +20,21 @@ interface ToolCallAccumulator {
   arguments: string;
 }
 
+interface SpeechWindow {
+  startedAt: number;
+  stoppedAt: number | null;
+  overlappedAssistant: boolean;
+}
+
+type TranscriptDecision =
+  | { accepted: true }
+  | { accepted: false; reason: string };
+
 export interface RealtimeCallbacks {
   /** User's speech transcribed */
   onUserTranscript?: (text: string, isFinal: boolean) => void;
+  /** Candidate transcript rejected before analysis/model update */
+  onTranscriptRejected?: (text: string, reason: string) => void;
   /** Model's response text (for display) */
   onModelText?: (text: string) => void;
   /** Learner model updated from tool result */
@@ -52,6 +64,30 @@ interface UseRealtimeVoiceReturn {
   /** Push a raw event to the Realtime DataChannel — used for mid-session steering
    *  (session.update instructions, conversation.item.create system notes, etc). */
   sendEvent: (event: Record<string, unknown>) => void;
+  /** Pre-fetch an ephemeral token so the next connect() skips the token roundtrip.
+   *  Tokens are short-lived; we cache for 50s. Safe to call repeatedly. */
+  prefetchToken: () => Promise<void>;
+}
+
+const TOKEN_FRESHNESS_MS = 50 * 1000;
+const IDLE_TIMEOUT_MS = 30 * 1000;
+const MIN_SPEECH_MS = 450;
+const ASSISTANT_ECHO_SUPPRESSION_MS = 900;
+
+function normalizeForVoiceGuard(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^0-9a-zäöüß\s]/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenOverlapRatio(a: string, b: string): number {
+  const left = normalizeForVoiceGuard(a).split(" ").filter(Boolean);
+  const right = new Set(normalizeForVoiceGuard(b).split(" ").filter(Boolean));
+  if (left.length === 0 || right.size === 0) return 0;
+  const overlap = left.filter((token) => right.has(token)).length;
+  return overlap / left.length;
 }
 
 // ── Hook ──
@@ -77,6 +113,17 @@ export function useRealtimeVoice(
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const toolCallsRef = useRef<Map<string, ToolCallAccumulator>>(new Map());
+  const prefetchedTokenRef = useRef<{ token: string; fetchedAt: number } | null>(null);
+  const lastActivityRef = useRef<number>(Date.now());
+  const idleTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const micReenableTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentSpeechRef = useRef<SpeechWindow | null>(null);
+  const lastCompletedSpeechRef = useRef<SpeechWindow | null>(null);
+  const assistantSpeakingRef = useRef(false);
+  const assistantSuppressUntilRef = useRef(0);
+  const currentAssistantTextRef = useRef("");
+  const recentAssistantTextsRef = useRef<string[]>([]);
+  const debugVoiceRef = useRef(false);
 
   const [isSupported] = useState(
     typeof window !== "undefined" &&
@@ -84,10 +131,98 @@ export function useRealtimeVoice(
       !!navigator.mediaDevices?.getUserMedia
   );
 
+  useEffect(() => {
+    debugVoiceRef.current =
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("voiceDebug") === "1";
+  }, []);
+
+  function debugVoice(event: string, details: Record<string, unknown> = {}) {
+    if (!debugVoiceRef.current) return;
+    console.debug(`[voice:${event}]`, details);
+  }
+
   function updateState(s: RealtimeState) {
     stateRef.current = s;
     setState(s);
+    if (s !== "idle") {
+      lastActivityRef.current = Date.now();
+    }
+    // Gate the microphone only while tutor audio is playing. Otherwise speaker
+    // audio can leak back into the mic and get interpreted as learner speech.
+    // Re-enable on audio/response completion, with a short fail-safe in case a
+    // browser misses the final event.
+    const stream = streamRef.current;
+    if (stream) {
+      const enabled = s !== "speaking";
+      stream.getAudioTracks().forEach((track) => {
+        track.enabled = enabled;
+      });
+      if (micReenableTimerRef.current) {
+        clearTimeout(micReenableTimerRef.current);
+        micReenableTimerRef.current = null;
+      }
+      if (!enabled) {
+        micReenableTimerRef.current = setTimeout(() => {
+          streamRef.current?.getAudioTracks().forEach((track) => {
+            track.enabled = true;
+          });
+        }, 12_000);
+      }
+    }
     callbacksRef.current.onStateChange?.(s);
+  }
+
+  function bumpActivity() {
+    lastActivityRef.current = Date.now();
+  }
+
+  function finishAssistantAudio() {
+    if (currentAssistantTextRef.current.trim()) {
+      recentAssistantTextsRef.current = [
+        currentAssistantTextRef.current,
+        ...recentAssistantTextsRef.current,
+      ].slice(0, 4);
+      currentAssistantTextRef.current = "";
+    }
+    assistantSpeakingRef.current = false;
+    assistantSuppressUntilRef.current = Date.now() + ASSISTANT_ECHO_SUPPRESSION_MS;
+  }
+
+  function decideTranscript(sentence: string): TranscriptDecision {
+    const normalized = normalizeForVoiceGuard(sentence);
+    if (!normalized) {
+      return { accepted: false, reason: "empty_transcript" };
+    }
+
+    const speech = lastCompletedSpeechRef.current ?? currentSpeechRef.current;
+    if (!speech) {
+      return { accepted: false, reason: "no_speech_started_event" };
+    }
+
+    const stoppedAt = speech.stoppedAt ?? Date.now();
+    const duration = stoppedAt - speech.startedAt;
+    if (duration < MIN_SPEECH_MS) {
+      return { accepted: false, reason: `speech_too_short_${duration}ms` };
+    }
+
+    if (speech.overlappedAssistant || speech.startedAt < assistantSuppressUntilRef.current) {
+      return { accepted: false, reason: "assistant_audio_overlap" };
+    }
+
+    const now = Date.now();
+    if (now < assistantSuppressUntilRef.current) {
+      return { accepted: false, reason: "assistant_audio_cooldown" };
+    }
+
+    for (const assistantText of recentAssistantTextsRef.current) {
+      const overlap = tokenOverlapRatio(sentence, assistantText);
+      if (overlap >= 0.72) {
+        return { accepted: false, reason: `echo_text_overlap_${Math.round(overlap * 100)}pct` };
+      }
+    }
+
+    return { accepted: true };
   }
 
   // ── Send event to Realtime API via DataChannel ──
@@ -106,6 +241,46 @@ export function useRealtimeVoice(
 
     try {
       const parsedArgs = JSON.parse(args);
+      if (name === "analyze_german_sentence") {
+        const sentence = String(parsedArgs.sentence ?? "");
+        const decision = decideTranscript(sentence);
+        currentSpeechRef.current = null;
+        lastCompletedSpeechRef.current = null;
+        debugVoice("transcript_decision", {
+          accepted: decision.accepted,
+          reason: decision.accepted ? null : decision.reason,
+          sentence,
+          lastCompletedSpeech: lastCompletedSpeechRef.current,
+          suppressUntilDeltaMs: assistantSuppressUntilRef.current - Date.now(),
+        });
+
+        if (!decision.accepted) {
+          callbacksRef.current.onTranscriptRejected?.(sentence, decision.reason);
+          sendEvent({
+            type: "conversation.item.create",
+            item: {
+              type: "function_call_output",
+              call_id: callId,
+              output: JSON.stringify({
+                ignored: true,
+                reason: decision.reason,
+                instruction:
+                  "This transcript was rejected by the client as likely echo, silence, or background noise. Do not analyze it and do not update the learner model.",
+              }),
+            },
+          });
+          sendEvent({
+            type: "response.create",
+            response: {
+              instructions:
+                "The last transcript was rejected as likely echo/noise. Do not speak. Wait silently for the learner's next real utterance.",
+            },
+          });
+          updateState("listening");
+          return;
+        }
+      }
+
       const res = await fetch("/api/realtime/tool", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -196,6 +371,85 @@ export function useRealtimeVoice(
     }
   }
 
+  async function analyzeCommittedTranscript(sentence: string) {
+    const decision = decideTranscript(sentence);
+    currentSpeechRef.current = null;
+    lastCompletedSpeechRef.current = null;
+    debugVoice("transcript_decision", {
+      accepted: decision.accepted,
+      reason: decision.accepted ? null : decision.reason,
+      sentence,
+      suppressUntilDeltaMs: assistantSuppressUntilRef.current - Date.now(),
+    });
+
+    if (!decision.accepted) {
+      callbacksRef.current.onTranscriptRejected?.(sentence, decision.reason);
+      updateState("listening");
+      return;
+    }
+
+    callbacksRef.current.onUserTranscript?.(sentence, true);
+    updateState("thinking");
+
+    try {
+      const res = await fetch("/api/realtime/tool", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          toolName: "analyze_german_sentence",
+          args: { sentence },
+          learnerModel: learnerModelRef.current,
+          conversationState: convStateRef.current,
+          dismissedNudges: dismissedNudgesRef.current,
+        }),
+      });
+
+      if (!res.ok) throw new Error(`Tool API error: ${res.status}`);
+      const data = await res.json();
+
+      if (data.updatedModel) {
+        learnerModelRef.current = data.updatedModel;
+        convStateRef.current = data.updatedState;
+        callbacksRef.current.onModelUpdate?.(
+          data.updatedModel,
+          data.updatedState
+        );
+      }
+
+      if (data.turnAnalysis) {
+        callbacksRef.current.onTurnAnalysis?.(data.turnAnalysis);
+      }
+
+      let coachMessage = "";
+      try {
+        const result = JSON.parse(data.result);
+        coachMessage = String(result.coachMessage ?? "");
+      } catch {
+        coachMessage = data.turnAnalysis?.responseText ?? "";
+      }
+
+      if (!coachMessage.trim()) {
+        updateState("listening");
+        return;
+      }
+
+      sendEvent({
+        type: "response.create",
+        response: {
+          instructions:
+            "Speak the following tutor response exactly. Do not add a new question. Do not mention hidden analysis or JSON.\n\n" +
+            coachMessage,
+        },
+      });
+    } catch (err) {
+      console.error("Transcript analysis failed:", err);
+      callbacksRef.current.onError?.(
+        err instanceof Error ? err.message : "Transcript analysis failed"
+      );
+      updateState("listening");
+    }
+  }
+
   // ── Handle DataChannel events from the Realtime API ──
 
   function handleDataChannelMessage(event: MessageEvent) {
@@ -209,18 +463,22 @@ export function useRealtimeVoice(
           break;
 
         case "conversation.item.input_audio_transcription.completed":
-          callbacksRef.current.onUserTranscript?.(data.transcript ?? "", true);
+          debugVoice("transcript_completed", { transcript: data.transcript ?? "" });
+          analyzeCommittedTranscript(data.transcript ?? "");
           break;
 
         // ── Model audio response started ──
         case "response.audio.delta":
           if (stateRef.current !== "speaking") {
+            assistantSpeakingRef.current = true;
+            currentAssistantTextRef.current = "";
             updateState("speaking");
           }
           break;
 
         // ── Model text response (for display) ──
         case "response.audio_transcript.delta":
+          currentAssistantTextRef.current += data.delta ?? "";
           callbacksRef.current.onModelText?.(data.delta ?? "");
           break;
 
@@ -252,6 +510,14 @@ export function useRealtimeVoice(
 
         // ── Response finished ──
         case "response.done":
+          finishAssistantAudio();
+          if (stateRef.current === "speaking") {
+            updateState("listening");
+          }
+          break;
+
+        case "response.audio.done":
+          finishAssistantAudio();
           if (stateRef.current === "speaking") {
             updateState("listening");
           }
@@ -259,11 +525,24 @@ export function useRealtimeVoice(
 
         // ── Input speech started (user is talking) ──
         case "input_audio_buffer.speech_started":
-          // Could update UI to show "user is speaking"
+          bumpActivity();
+          currentSpeechRef.current = {
+            startedAt: Date.now(),
+            stoppedAt: null,
+            overlappedAssistant:
+              assistantSpeakingRef.current || Date.now() < assistantSuppressUntilRef.current,
+          };
+          debugVoice("speech_started", { ...currentSpeechRef.current });
           break;
 
         // ── Input speech ended ──
         case "input_audio_buffer.speech_stopped":
+          bumpActivity();
+          if (currentSpeechRef.current) {
+            currentSpeechRef.current.stoppedAt = Date.now();
+            lastCompletedSpeechRef.current = currentSpeechRef.current;
+            debugVoice("speech_stopped", { ...lastCompletedSpeechRef.current });
+          }
           break;
 
         // ── Session errors ──
@@ -279,6 +558,49 @@ export function useRealtimeVoice(
     }
   }
 
+  // ── Token fetch helper (used by both prefetch and connect) ──
+
+  async function fetchEphemeralToken(): Promise<string> {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        headers.Authorization = `Bearer ${session.access_token}`;
+      }
+    } catch {
+      // Supabase env may be unset on localhost — proceed without auth header.
+    }
+    const tokenRes = await fetch("/api/realtime/session", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ learnerModel: learnerModelRef.current }),
+    });
+    if (!tokenRes.ok) {
+      let reason = `Failed to create session (${tokenRes.status})`;
+      try {
+        const body = await tokenRes.json();
+        if (body?.message) reason = body.message;
+        else if (body?.error) reason = body.error;
+      } catch {}
+      throw new Error(reason);
+    }
+    const { token } = await tokenRes.json();
+    if (!token) throw new Error("No token received");
+    return token;
+  }
+
+  const prefetchToken = useCallback(async () => {
+    if (!learnerModelRef.current) return;
+    const cached = prefetchedTokenRef.current;
+    if (cached && Date.now() - cached.fetchedAt < TOKEN_FRESHNESS_MS) return;
+    try {
+      const token = await fetchEphemeralToken();
+      prefetchedTokenRef.current = { token, fetchedAt: Date.now() };
+    } catch {
+      // Silent — connect() will retry on demand
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Connect: fetch token → setup WebRTC → start session ──
 
   const connect = useCallback(async () => {
@@ -288,49 +610,23 @@ export function useRealtimeVoice(
     updateState("connecting");
 
     try {
-      // 1. Get ephemeral token from our server. Forward the user's Supabase
-      //    access token so the server can enforce the per-user daily cap.
-      //    On localhost (no session) the server skips enforcement.
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session?.access_token) {
-          headers.Authorization = `Bearer ${session.access_token}`;
-        }
-      } catch {
-        // Supabase env may be unset on localhost — proceed without auth header.
-      }
-
-      const tokenRes = await fetch("/api/realtime/session", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          learnerModel: learnerModelRef.current,
-        }),
-      });
-
-      if (!tokenRes.ok) {
-        // Surface the server's reason (e.g. daily cap) rather than a generic fail
-        let reason = `Failed to create session (${tokenRes.status})`;
-        try {
-          const body = await tokenRes.json();
-          if (body?.message) reason = body.message;
-          else if (body?.error) reason = body.error;
-        } catch {
-          // ignore — keep generic reason
-        }
-        throw new Error(reason);
-      }
-      const { token } = await tokenRes.json();
-      if (!token) throw new Error("No token received");
-
-      // 2. Get microphone access
-      const stream = await navigator.mediaDevices.getUserMedia({
+      // 1+2. Fetch token and request mic in parallel — they're independent.
+      const cached = prefetchedTokenRef.current;
+      const tokenPromise =
+        cached && Date.now() - cached.fetchedAt < TOKEN_FRESHNESS_MS
+          ? Promise.resolve(cached.token)
+          : fetchEphemeralToken();
+      const micPromise = navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
+          autoGainControl: true,
         },
       });
+
+      const [token, stream] = await Promise.all([tokenPromise, micPromise]);
+      // Token consumed — drop the cache so we don't reuse a stale one.
+      prefetchedTokenRef.current = null;
       streamRef.current = stream;
 
       // 3. Create RTCPeerConnection
@@ -357,6 +653,18 @@ export function useRealtimeVoice(
 
       dc.onopen = () => {
         updateState("listening");
+        // Auto-disconnect after IDLE_TIMEOUT_MS of silence (no activity events).
+        // Frees the realtime credit budget when the user walks away.
+        if (idleTimerRef.current) clearInterval(idleTimerRef.current);
+        idleTimerRef.current = setInterval(() => {
+          if (
+            stateRef.current === "listening" &&
+            Date.now() - lastActivityRef.current > IDLE_TIMEOUT_MS
+          ) {
+            cleanup();
+            updateState("idle");
+          }
+        }, 5000);
         // Trigger the model to call get_session_context and greet the user
         sendEvent({
           type: "response.create",
@@ -415,6 +723,14 @@ export function useRealtimeVoice(
   // ── Disconnect and cleanup ──
 
   function cleanup() {
+    if (idleTimerRef.current) {
+      clearInterval(idleTimerRef.current);
+      idleTimerRef.current = null;
+    }
+    if (micReenableTimerRef.current) {
+      clearTimeout(micReenableTimerRef.current);
+      micReenableTimerRef.current = null;
+    }
     if (dcRef.current) {
       dcRef.current.close();
       dcRef.current = null;
@@ -432,6 +748,12 @@ export function useRealtimeVoice(
       audioRef.current = null;
     }
     toolCallsRef.current.clear();
+    currentSpeechRef.current = null;
+    lastCompletedSpeechRef.current = null;
+    assistantSpeakingRef.current = false;
+    assistantSuppressUntilRef.current = 0;
+    currentAssistantTextRef.current = "";
+    recentAssistantTextsRef.current = [];
   }
 
   const disconnect = useCallback(() => {
@@ -456,5 +778,6 @@ export function useRealtimeVoice(
     disconnect,
     isSupported,
     sendEvent: sendEventExternal,
+    prefetchToken,
   };
 }

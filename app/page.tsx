@@ -1,20 +1,27 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 import GrammarCorrection from "@/components/GrammarCorrection";
 import RuleCard from "@/components/RuleCard";
 import ScoreRing from "@/components/ScoreRing";
+import BrandMark from "@/components/BrandMark";
+import ActivityCard from "@/components/ActivityCard";
+import VocabCard from "@/components/VocabCard";
+import GrammarTable from "@/components/GrammarTable";
+import ThinkingMark from "@/components/ThinkingMark";
+import { GRAMMAR_STRUCTURES } from "@/lib/grammarStructures";
 import SpeechButton from "@/components/SpeechButton";
-import SpeakButton from "@/components/SpeakButton";
 import { useSpeech } from "@/lib/useSpeech";
-import { useRealtimeVoice, RealtimeState } from "@/lib/useRealtimeVoice";
+import { useRealtimeVoice } from "@/lib/useRealtimeVoice";
 import { VoiceTurnAnalysis } from "@/lib/realtimeTools";
 import { buildRealtimeInstructions } from "@/lib/realtimeInstructions";
 import { Token, LearnerModel, ConversationState, CefrLevel, CorrectionLevel } from "@/types";
 import AuthGuard from "@/components/AuthGuard";
 import { useAuth } from "@/lib/AuthContext";
 import { loadLearnerModel, saveLearnerModel } from "@/lib/learnerModelSync";
+import { getLessonForStructure } from "@/lib/learningPath";
 import {
   takeSnapshot,
   generateSessionSummary,
@@ -26,6 +33,8 @@ import {
   MasterySnapshot,
   PersistentErrorAlert,
 } from "@/lib/sessionMemory";
+import { saveSnapshot, saveSummary } from "@/lib/sessionMemorySync";
+import { loadCachedSession, saveCachedSession, clearCachedSession } from "@/lib/sessionChatCache";
 
 // ── Helpers ──
 
@@ -50,6 +59,7 @@ interface Correction {
 }
 
 interface RuleCardData {
+  structureId: string;
   structureName: string;
   rule: string;
   l1Comparison: string | null;
@@ -117,6 +127,25 @@ const VOICE_OPTIONS: { id: TTSVoice; label: string }[] = [
   { id: "onyx", label: "Onyx (deep)" },
 ];
 
+function BrandLockup() {
+  return (
+    <div className="flex items-center gap-2.5">
+      <BrandMark size={28} />
+      <span className="text-sm font-semibold tracking-[-0.01em] text-gray-900">GrammarFlow</span>
+    </div>
+  );
+}
+
+function formatRecency(value: string | null | undefined) {
+  if (!value) return "first surfaced recently";
+  const then = new Date(value).getTime();
+  if (Number.isNaN(then)) return "first surfaced recently";
+  const days = Math.max(0, Math.round((Date.now() - then) / 86_400_000));
+  if (days === 0) return "surfaced today";
+  if (days === 1) return "surfaced yesterday";
+  return `first surfaced ${days}d ago`;
+}
+
 function HomeContent() {
   const auth = useAuth();
   const userId = auth.user?.id ?? null;
@@ -136,6 +165,9 @@ function HomeContent() {
     void saveLearnerModel(model, userIdRef.current);
   }, []);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const voiceParam = searchParams.get("voice");
+  const focusParam = searchParams.get("focus");
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -146,25 +178,66 @@ function HomeContent() {
   const [needsLanguage, setNeedsLanguage] = useState(false);
   const [initializing, setInitializing] = useState(true);
   const [voiceChoice, setVoiceChoice] = useState<TTSVoice>("nova");
-  const [speakingIdx, setSpeakingIdx] = useState<number | null>(null);
   const [showLangMenu, setShowLangMenu] = useState(false);
   const [showVoiceMenu, setShowVoiceMenu] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
-  const [realtimeMode, setRealtimeMode] = useState(false);
-  const [realtimeTranscript, setRealtimeTranscript] = useState("");
-  const [realtimeModelText, setRealtimeModelText] = useState("");
-  const [voiceTurns, setVoiceTurns] = useState<VoiceTurnAnalysis[]>([]);
+  // ── Realtime voice (unified — runs alongside text input) ──
+  const [pendingTranscript, setPendingTranscript] = useState("");
+  const [pendingModelText, setPendingModelText] = useState("");
+  // Voice-only analyses for the *current* realtime session — drives drill
+  // announcements and focus-steering. Cleared on disconnect.
+  const [voiceSessionAnalyses, setVoiceSessionAnalyses] = useState<VoiceTurnAnalysis[]>([]);
   const [dismissedNudges, setDismissedNudges] = useState<string[]>([]);
-  const [realtimeError, setRealtimeError] = useState<string | null>(null);
-  const voiceScrollRef = useRef<HTMLDivElement>(null);
-  const voiceScrollContainerRef = useRef<HTMLDivElement>(null);
-  const voiceIsNearBottomRef = useRef(true);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
   const [streamingText, setStreamingText] = useState("");
   const [streamingSentence, setStreamingSentence] = useState("");
   const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
   const [topicRecs, setTopicRecs] = useState<{ structureId: string; name: string; reason: string; priority: number }[]>([]);
   const [persistentAlerts, setPersistentAlerts] = useState<PersistentErrorAlert[]>([]);
-  const [showSummary, setShowSummary] = useState(false);
+  const [rightRailCollapsed, setRightRailCollapsed] = useState(false);
+  // Pinned reference cards — chronological order, newest appended at the end so
+  // the latest pin sits at the bottom of the left rail (closest to the chat input).
+  const [pinnedStructureIds, setPinnedStructureIds] = useState<string[]>([]);
+  // Guard: skip the very first save effect run so we don't clobber the saved
+  // value with the initial empty state before the load effect has hydrated it.
+  const collapseHydratedRef = useRef(false);
+  const pinsHydratedRef = useRef(false);
+  useEffect(() => {
+    const savedRight = localStorage.getItem("gf:rightRailCollapsed");
+    if (savedRight === "1") setRightRailCollapsed(true);
+    const savedPins = localStorage.getItem("gf:pinnedStructures");
+    if (savedPins) {
+      try {
+        const parsed = JSON.parse(savedPins);
+        if (Array.isArray(parsed)) setPinnedStructureIds(parsed.filter((x) => typeof x === "string"));
+      } catch {}
+    }
+  }, []);
+  useEffect(() => {
+    if (!collapseHydratedRef.current) {
+      collapseHydratedRef.current = true;
+      return;
+    }
+    localStorage.setItem("gf:rightRailCollapsed", rightRailCollapsed ? "1" : "0");
+  }, [rightRailCollapsed]);
+  useEffect(() => {
+    if (!pinsHydratedRef.current) {
+      pinsHydratedRef.current = true;
+      return;
+    }
+    localStorage.setItem("gf:pinnedStructures", JSON.stringify(pinnedStructureIds));
+  }, [pinnedStructureIds]);
+  const togglePinStructure = useCallback((id: string) => {
+    setPinnedStructureIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  }, []);
+  const pinStructure = useCallback((id: string) => {
+    setPinnedStructureIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+  }, []);
+  const unpinStructure = useCallback((id: string) => {
+    setPinnedStructureIds((prev) => prev.filter((x) => x !== id));
+  }, []);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const pendingPromptRef = useRef<string | null>(null);
@@ -184,7 +257,10 @@ function HomeContent() {
     },
   });
 
-  // Realtime voice (OpenAI WebRTC) — used in voice conversation mode
+  // Realtime voice (OpenAI WebRTC) — engaged from the input-bar mic toggle.
+  // onTurnAnalysis adapts the voice result into the same `turns` shape that
+  // text input produces, so the rest of the UI (corrections, rule cards,
+  // deep-practice nudge, focus rail, pinned references) renders identically.
   const realtime = useRealtimeVoice({
     learnerModel,
     conversationState: convState,
@@ -192,15 +268,16 @@ function HomeContent() {
     callbacks: {
       onUserTranscript: (text, isFinal) => {
         if (isFinal) {
-          setRealtimeTranscript(text);
+          setPendingTranscript(text);
         } else {
-          setRealtimeTranscript((prev) => prev + text);
+          setPendingTranscript((prev) => prev + text);
         }
       },
+      onTranscriptRejected: () => {
+        setPendingTranscript("");
+      },
       onModelText: (text) => {
-        // Live "model speaking" text — we only show it briefly before the
-        // rich turn card lands. Kept for when tool analysis is delayed.
-        setRealtimeModelText((prev) => prev + text);
+        setPendingModelText((prev) => prev + text);
       },
       onModelUpdate: (model, state) => {
         setLearnerModel(model);
@@ -208,53 +285,73 @@ function HomeContent() {
         saveModel(model);
       },
       onTurnAnalysis: (analysis) => {
-        // Commit the finalized turn into history and clear the live bubbles
-        setVoiceTurns((prev) => [...prev, analysis]);
-        setRealtimeTranscript("");
-        setRealtimeModelText("");
+        const referenceStructureId =
+          analysis.ruleCard?.structureId ??
+          analysis.activeRule?.structureId ??
+          analysis.deepPracticeNudge?.structureId ??
+          null;
+        if (referenceStructureId && analysis.corrections.length > 0) {
+          pinStructure(referenceStructureId);
+        }
+        // Commit a unified Turn so it slots into the same render pipeline
+        // text input uses. updatedModel/updatedState aren't read for render
+        // — onModelUpdate already pushed those into state.
+        setTurns((prev) => [
+          ...prev,
+          {
+            sentence: analysis.sentence,
+            result: {
+              responseText: analysis.responseText,
+              corrections: analysis.corrections,
+              ruleCard: analysis.ruleCard,
+              nextPrompt: analysis.nextPrompt,
+              score: analysis.score,
+              detectedLevel: analysis.detectedLevel,
+              tokens: analysis.tokens,
+              updatedModel: learnerModelRef.current ?? ({} as LearnerModel),
+              updatedState: convStateRef.current ?? ({} as ConversationState),
+              lessonSuggestion: analysis.lessonSuggestion,
+              activeRule: analysis.activeRule,
+              deepPracticeNudge: analysis.deepPracticeNudge,
+            },
+          },
+        ]);
+        setVoiceSessionAnalyses((prev) => [...prev, analysis]);
+        setPendingTranscript("");
+        setPendingModelText("");
       },
       onError: (msg) => {
         console.error("Realtime error:", msg);
-        setRealtimeError(msg);
-        setRealtimeMode(false);
+        setVoiceError(msg);
       },
-      onStateChange: () => {
-        // Turn history lives in voiceTurns — do NOT wipe it here.
-        // Live bubbles clear when onTurnAnalysis commits the turn.
+      onStateChange: (s) => {
+        if (s === "idle") {
+          // Connection ended — clear pending bubbles and per-session voice
+          // analyses. The committed turns stay in the unified scrollback.
+          setPendingTranscript("");
+          setPendingModelText("");
+          setVoiceSessionAnalyses([]);
+        }
       },
     },
   });
 
-  function toggleRealtimeMode() {
-    if (realtimeMode) {
+  // Refs so the realtime callbacks can read current state without stale closures.
+  const learnerModelRef = useRef<LearnerModel | null>(null);
+  learnerModelRef.current = learnerModel;
+  const convStateRef = useRef<ConversationState | null>(null);
+  convStateRef.current = convState;
+
+  const voiceConnected = realtime.state !== "idle";
+
+  function toggleVoice() {
+    if (voiceConnected) {
       realtime.disconnect();
-      setRealtimeMode(false);
-      setRealtimeTranscript("");
-      setRealtimeModelText("");
-      setVoiceTurns([]);
-      setDismissedNudges([]);
     } else {
-      setRealtimeError(null);
-      setRealtimeMode(true);
-      setVoiceTurns([]);
-      setDismissedNudges([]);
-      stop(); // stop any TTS
+      setVoiceError(null);
+      stop(); // stop any TTS that was running from text-mode replies
       realtime.connect();
     }
-  }
-
-  // Auto-scroll voice conversation — but only if the learner is already near
-  // the bottom. If they've scrolled up to read a correction, respect that.
-  useEffect(() => {
-    if (!realtimeMode) return;
-    if (!voiceIsNearBottomRef.current) return;
-    voiceScrollRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [voiceTurns, realtimeTranscript, realtimeMode]);
-
-  function handleVoiceScroll(e: React.UIEvent<HTMLDivElement>) {
-    const el = e.currentTarget;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    voiceIsNearBottomRef.current = distanceFromBottom < 120;
   }
 
   // ── Adaptive focus steering ──
@@ -264,8 +361,8 @@ function HomeContent() {
   const lastSteeredFocusRef = useRef<string | null>(null);
   const lastSteeredNudgeRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!realtimeMode || voiceTurns.length === 0) return;
-    const last = voiceTurns[voiceTurns.length - 1];
+    if (!voiceConnected || voiceSessionAnalyses.length === 0) return;
+    const last = voiceSessionAnalyses[voiceSessionAnalyses.length - 1];
     const currentFocus = last.activeRule?.structureName ?? null;
     const currentNudgeId = last.deepPracticeNudge?.structureId ?? null;
 
@@ -310,7 +407,7 @@ function HomeContent() {
       lastSteeredFocusRef.current = currentFocus;
       if (currentNudgeId) lastSteeredNudgeRef.current = currentNudgeId;
     }
-  }, [voiceTurns, realtimeMode, realtime]);
+  }, [voiceSessionAnalyses, voiceConnected, realtime]);
 
   // ── Verbal drill announcement ──
   // When session errors on a structure hit the drill threshold, inject a
@@ -320,13 +417,13 @@ function HomeContent() {
   const DRILL_ANNOUNCE_THRESHOLD = 3;
   const announcedDrillsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (!realtimeMode || voiceTurns.length === 0) return;
-    const last = voiceTurns[voiceTurns.length - 1];
+    if (!voiceConnected || voiceSessionAnalyses.length === 0) return;
+    const last = voiceSessionAnalyses[voiceSessionAnalyses.length - 1];
     if (last.errorStructureIds.length === 0) return;
 
     for (const structureId of last.errorStructureIds) {
       if (announcedDrillsRef.current.has(structureId)) continue;
-      const sessionErrors = voiceTurns.filter((t) =>
+      const sessionErrors = voiceSessionAnalyses.filter((t) =>
         t.errorStructureIds.includes(structureId)
       ).length;
       if (sessionErrors < DRILL_ANNOUNCE_THRESHOLD) continue;
@@ -361,16 +458,16 @@ function HomeContent() {
       });
       announcedDrillsRef.current.add(structureId);
     }
-  }, [voiceTurns, realtimeMode, realtime]);
+  }, [voiceSessionAnalyses, voiceConnected, realtime]);
 
   // Reset steering trackers when leaving voice mode
   useEffect(() => {
-    if (!realtimeMode) {
+    if (!voiceConnected) {
       lastSteeredFocusRef.current = null;
       lastSteeredNudgeRef.current = null;
       announcedDrillsRef.current = new Set();
     }
-  }, [realtimeMode]);
+  }, [voiceConnected]);
 
   // ── Live language switch during voice chat ──
   // When the learner changes the coach language dropdown mid-conversation,
@@ -382,11 +479,11 @@ function HomeContent() {
   const detectedLevel = learnerModel?.detectedLevel ?? null;
   const lastPushedLanguageRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!realtimeMode) {
+    if (!voiceConnected) {
       lastPushedLanguageRef.current = null;
       return;
     }
-    if (realtime.state === "idle" || realtime.state === "connecting") return;
+    if (realtime.state === "connecting") return;
     if (!coachLanguage || !nativeLanguage || !detectedLevel) return;
 
     // Skip the first push — the session was created with these exact values
@@ -404,11 +501,12 @@ function HomeContent() {
           nativeLanguage,
           coachLanguage,
           level: detectedLevel,
+          targetLanguage: learnerModel?.targetLanguage,
         }),
       },
     });
     lastPushedLanguageRef.current = coachLanguage;
-  }, [coachLanguage, nativeLanguage, detectedLevel, realtimeMode, realtime]);
+  }, [coachLanguage, nativeLanguage, detectedLevel, voiceConnected, realtime, learnerModel?.targetLanguage]);
 
   // Load voice choice preference
   useEffect(() => {
@@ -417,6 +515,26 @@ function HomeContent() {
       if (saved) setVoiceChoice(saved);
     }
   }, []);
+
+  // Auto-engage voice mode + focus structure when arriving from a lesson
+  // (?voice=1&focus=<structureId>). Runs once after init, then strips the
+  // params so a refresh doesn't re-trigger.
+  const autoVoiceHandledRef = useRef(false);
+  useEffect(() => {
+    if (autoVoiceHandledRef.current) return;
+    if (initializing || !learnerModel || !convState) return;
+    if (focusParam) {
+      setConvState({ ...convState, focusStructure: focusParam, focusRemaining: 5 });
+    }
+    if (voiceParam === "1" && realtime.isSupported && !voiceConnected) {
+      // Defer one tick so the focus state lands before connect() reads it
+      setTimeout(() => realtime.connect(), 50);
+    }
+    if (voiceParam || focusParam) {
+      autoVoiceHandledRef.current = true;
+      router.replace("/", { scroll: false });
+    }
+  }, [initializing, learnerModel, convState, voiceParam, focusParam, realtime, voiceConnected, router]);
 
   // ── Load or initialize learner model ──
   // Waits for auth to resolve, then pulls from Supabase for signed-in users
@@ -473,13 +591,28 @@ function HomeContent() {
       setOpener(getSessionOpener(model, recs));
       if (!existingModel) saveModel(model);
     } finally {
+      // Hydrate visible scrollback from the hot-tier cache so a refresh keeps
+      // the in-flight conversation. The brain state (mastery, errors) is
+      // already restored from Supabase higher up; this only covers chat UX.
+      const cached = loadCachedSession<Turn, ConversationState>(userIdRef.current);
+      if (cached && cached.turns.length > 0) {
+        setTurns(cached.turns);
+        if (cached.convState) setConvState(cached.convState);
+      }
       setInitializing(false);
     }
   }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [turns, loading, streamingText]);
+  }, [turns, loading, streamingText, pendingTranscript, pendingModelText]);
+
+  // Mirror visible chat to the hot-tier cache. Skipped while initializing so
+  // we don't write the empty starter state over a freshly hydrated session.
+  useEffect(() => {
+    if (initializing) return;
+    saveCachedSession(userIdRef.current, turns, convState);
+  }, [turns, convState, initializing]);
 
   useEffect(() => {
     if (!loading && !needsLanguage && !initializing) {
@@ -487,26 +620,16 @@ function HomeContent() {
     }
   }, [turns, loading, needsLanguage, initializing]);
 
-  // Opener is no longer auto-spoken on page load. Some browsers block
-  // autoplay audio pre-interaction (silent TTS fallback, then a second
-  // source playing = echo). The manual SpeakButton next to the opener
-  // text still lets the learner hear it on demand.
-
-  // Clear manual speak index when TTS stops
-  useEffect(() => {
-    if (!speaking) setSpeakingIdx(null);
-  }, [speaking]);
-
-  // Speech input handler — fills the text input
+  // Speech-to-text input handler — fills the input, user reviews and submits.
+  // Same flow as typing, so deep analysis (Sonnet, full breakdown, rule cards
+  // with pin) renders just like a typed turn.
   function handleSpeechResult(text: string) {
     setInput(text);
   }
 
-  // Stop TTS when mic starts so they don't overlap
+  // Stop any in-flight TTS when the mic activates so they don't overlap.
   function handleListeningChange(listening: boolean) {
-    if (listening) {
-      stop();
-    }
+    if (listening) stop();
   }
 
   async function submitSentence(text: string) {
@@ -638,15 +761,6 @@ function HomeContent() {
     }
   }
 
-  function handleSpeak(text: string, idx: number) {
-    if (speakingIdx === idx) {
-      stop();
-    } else {
-      setSpeakingIdx(idx);
-      speak(text);
-    }
-  }
-
   function handleLanguageSubmit() {
     if (!langInput.trim()) return;
     setNeedsLanguage(false);
@@ -670,9 +784,15 @@ function HomeContent() {
 
   function startNewSession() {
     stop();
+    // The hot-tier scrollback is per-session — wipe it so the next visit
+    // doesn't re-hydrate stale turns. Brain state (mastery, summaries) lives
+    // in Supabase and is unaffected.
+    clearCachedSession(userIdRef.current);
     if (learnerModel && turns.length > 0) {
-      // Take mastery snapshot before ending session
+      // Take mastery snapshot before ending session (writes localStorage)
       const snapshot = takeSnapshot(learnerModel);
+      // Mirror to Supabase fire-and-forget so cross-device users see history
+      void saveSnapshot(snapshot, userId);
 
       // Generate session summary (comparing start vs end of session)
       const startModel = sessionStartModelRef.current ?? learnerModel;
@@ -684,7 +804,7 @@ function HomeContent() {
         structuresPracticed
       );
       setSessionSummary(summary);
-      setShowSummary(true);
+      void saveSummary(summary, userId);
 
       // Refresh persistent error alerts
       const snapshots = loadSnapshots();
@@ -692,9 +812,21 @@ function HomeContent() {
 
       // Update topic recommendations for next session
       setTopicRecs(getSmartTopicRecommendations(learnerModel, snapshots));
+
+      // Reset for next visit + bump the session count
+      setTurns([]);
+      const updatedModel = { ...learnerModel, sessionCount: learnerModel.sessionCount + 1 };
+      setLearnerModel(updatedModel);
+      saveModel(updatedModel);
+      sessionStartModelRef.current = JSON.parse(JSON.stringify(updatedModel));
+      initSession(updatedModel.nativeLanguage, updatedModel);
+
+      // Hand off to the dedicated recap route — replaces the modal
+      router.push("/session/recap");
+      return;
     }
 
-    // Reset for new session
+    // No turns → just reset state, stay on /chat
     setTurns([]);
     if (learnerModel) {
       const updatedModel = { ...learnerModel, sessionCount: learnerModel.sessionCount + 1 };
@@ -712,11 +844,6 @@ function HomeContent() {
   const totalStructures = learnerModel?.structures.length ?? 0;
   const weakStructures = learnerModel?.structures.filter((s) => s.mastery < 0.5).length ?? 0;
 
-  // Active rule from the latest turn (for sidebar display)
-  const latestActiveRule = turns.length > 0
-    ? turns[turns.length - 1].result.activeRule
-    : null;
-
   // Deep practice nudge from the latest turn
   const latestDeepPracticeNudge = turns.length > 0
     ? turns[turns.length - 1].result.deepPracticeNudge
@@ -728,8 +855,10 @@ function HomeContent() {
       <div className="flex min-h-screen flex-col items-center justify-center bg-gray-50 p-6">
         <div className="w-full max-w-md space-y-8 text-center">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight text-gray-900">GrammarCoach</h1>
-            <p className="mt-2 text-base text-gray-500">Learn German through conversation</p>
+            <div className="flex justify-center">
+              <BrandLockup />
+            </div>
+            <p className="mt-2 text-base text-gray-500">Learn through conversation</p>
           </div>
           <div className="space-y-3">
             <p className="text-sm text-gray-600">What&apos;s your native language?</p>
@@ -769,23 +898,50 @@ function HomeContent() {
 
   // ── Main conversation flow ──
   const lastResult = turns.length > 0 ? turns[turns.length - 1].result : null;
+  const latestRuleForSidebar = lastResult?.activeRule ?? null;
+  const latestRuleCardForSidebar = lastResult?.ruleCard ?? null;
   const ruleTokens: Token[] = lastResult
     ? lastResult.tokens.filter((t) => (t.status === "wrong" || t.status === "warn") && (t.correction || t.rule))
+    : [];
+  const currentAnalysisCorrections: Correction[] = lastResult
+    ? lastResult.corrections.length > 0
+      ? lastResult.corrections
+      : ruleTokens
+          .filter((token) => token.correction)
+          .map((token) => ({
+            original: token.word,
+            correction: token.correction!,
+            level: token.status === "wrong" ? "explicit" : "highlight",
+          }))
     : [];
 
   // ── Mistake highlights for sidebar ──
   const errorPatterns = learnerModel?.errorPatterns ?? [];
   const topMistakes = [...errorPatterns].sort((a, b) => b.count - a.count).slice(0, 5);
+  const mistakeOfTheDay = topMistakes[0] ?? null;
+  const mistakeStructure = mistakeOfTheDay && learnerModel
+    ? learnerModel.structures.find((s) => s.id === mistakeOfTheDay.structureId)
+    : null;
+  // Pinned reference cards — resolve IDs to definitions, drop any that are no
+  // longer in the static list (defensive against stale localStorage entries).
+  const pinnedStructureDefs = pinnedStructureIds
+    .map((id) => GRAMMAR_STRUCTURES.find((s) => s.id === id) ?? null)
+    .filter((s): s is NonNullable<typeof s> => s !== null);
+  const showLeftRail = pinnedStructureDefs.length > 0;
   const weakList = learnerModel?.structures.filter((s) => s.mastery < 0.5).sort((a, b) => a.mastery - b.mastery).slice(0, 3) ?? [];
+  // Honest focus pick — falls back to "anywhere you'd like" if the model has no signal yet,
+  // instead of hardcoding a German-specific term like Akkusativ.
+  const dailyPromptFocus = topicRecs[0]?.name ?? weakList[0]?.name ?? null;
+  const priorSessionCount = learnerModel?.sessionCount ?? 0;
 
   return (
-    <div className="flex min-h-screen flex-col bg-gray-50">
+    <div className="flex h-screen flex-col bg-gray-50">
       {/* Header */}
-      <header className="flex items-center justify-between border-b border-gray-200 bg-white px-6 py-3">
+      <header className="shrink-0 flex items-center justify-between border-b border-gray-200 bg-white px-6 py-3">
         <div className="flex items-center gap-3">
-          <span className="text-sm font-bold text-gray-900">GrammarCoach</span>
+          <BrandLockup />
           {latestLevel && (
-            <span className="rounded-full bg-gray-100 px-2.5 py-0.5 text-[11px] font-medium text-gray-600">
+            <span className="rounded-full bg-chip-bg px-2.5 py-0.5 text-[11px] font-medium text-gray-600">
               {latestLevel} &middot; {LEVEL_LABELS[latestLevel]}
             </span>
           )}
@@ -795,10 +951,10 @@ function HomeContent() {
           <div className="relative">
             <button
               onClick={() => setShowLangMenu(!showLangMenu)}
-              className="rounded-lg bg-gray-100 px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-200 transition-colors"
+              className="rounded-lg bg-chip-bg px-3 py-1.5 text-xs text-gray-600 transition-colors hover:bg-line"
               title="Language the coach explains in (not the language you're learning)"
             >
-              Coach: {learnerModel?.coachLanguage ?? "English"}
+              {learnerModel?.coachLanguage ?? "English"}
             </button>
             {showLangMenu && (
               <div className="absolute right-0 top-full mt-1 z-10 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
@@ -821,14 +977,14 @@ function HomeContent() {
             <div className="relative">
               <button
                 onClick={() => setShowVoiceMenu(!showVoiceMenu)}
-                className="flex items-center gap-1.5 rounded-lg bg-gray-100 px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-200 transition-colors"
+                className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-gray-500 transition-colors hover:bg-gray-100"
                 title="Change coach voice"
+                aria-label="Change coach voice"
               >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
                   <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
                 </svg>
-                {voiceChoice}
               </button>
               {showVoiceMenu && (
                 <div className="absolute right-0 top-full mt-1 z-10 rounded-lg border border-gray-200 bg-white py-1 shadow-lg min-w-[140px]">
@@ -851,39 +1007,12 @@ function HomeContent() {
               )}
             </div>
           )}
-          {/* Realtime voice chat toggle */}
-          {realtime.isSupported && (
-            <button
-              onClick={toggleRealtimeMode}
-              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                realtimeMode
-                  ? "bg-red-100 text-red-700 hover:bg-red-200"
-                  : "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
-              }`}
-              title={realtimeMode ? "End voice conversation" : "Start real-time voice conversation"}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                {realtimeMode ? (
-                  <>
-                    <line x1="18" y1="6" x2="6" y2="18" />
-                    <line x1="6" y1="6" x2="18" y2="18" />
-                  </>
-                ) : (
-                  <>
-                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                    <line x1="12" y1="19" x2="12" y2="23" />
-                  </>
-                )}
-              </svg>
-              {realtimeMode ? "End Voice" : "Voice Chat"}
-            </button>
-          )}
+          {/* Voice chat is now engaged from the input-bar mic button. */}
           <button onClick={startNewSession} className="rounded-lg px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-100">
             New Session
           </button>
-          <button onClick={() => router.push("/progress")} className="text-xs text-gray-400 hover:text-gray-600">
-            Overview &rarr;
+          <button onClick={() => router.push("/progress")} className="rounded-lg px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-100">
+            Mastery
           </button>
 
           {/* User avatar + menu — only shows when a real user is signed in.
@@ -921,92 +1050,15 @@ function HomeContent() {
         </div>
       </header>
 
-      {/* Session Summary Modal */}
-      {showSummary && sessionSummary && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="mx-4 w-full max-w-md rounded-2xl bg-white p-6 shadow-xl space-y-4">
-            <h3 className="text-lg font-bold text-gray-900">Session Complete</h3>
-            <p className="text-sm text-gray-600">{sessionSummary.summaryText}</p>
-
-            {/* Mastery changes */}
-            {sessionSummary.masteryDeltas.length > 0 && (
-              <div className="space-y-1.5">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Progress this session</p>
-                {sessionSummary.masteryDeltas.map((d) => (
-                  <div key={d.structureId} className="flex items-center justify-between text-sm">
-                    <span className="text-gray-700">{d.name}</span>
-                    <span className={d.after > d.before ? "text-green-600" : "text-red-500"}>
-                      {Math.round(d.before * 100)}% → {Math.round(d.after * 100)}%
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Strength / Weakness */}
-            <div className="flex gap-3 text-xs">
-              {sessionSummary.topStrength && (
-                <div className="flex-1 rounded-lg bg-green-50 px-3 py-2">
-                  <p className="font-medium text-green-800">Strength</p>
-                  <p className="text-green-600">{sessionSummary.topStrength}</p>
-                </div>
-              )}
-              {sessionSummary.topWeakness && (
-                <div className="flex-1 rounded-lg bg-amber-50 px-3 py-2">
-                  <p className="font-medium text-amber-800">Focus next</p>
-                  <p className="text-amber-600">{sessionSummary.topWeakness}</p>
-                </div>
-              )}
-            </div>
-
-            {/* Stats row */}
-            <div className="flex gap-3 text-center text-xs text-gray-500">
-              <div className="flex-1 rounded-lg bg-gray-50 py-2">
-                <p className="text-lg font-bold text-gray-900">{sessionSummary.turnCount}</p>
-                <p>exchanges</p>
-              </div>
-              <div className="flex-1 rounded-lg bg-gray-50 py-2">
-                <p className="text-lg font-bold text-gray-900">{sessionSummary.errorsThisSession}</p>
-                <p>corrected</p>
-              </div>
-              <div className="flex-1 rounded-lg bg-gray-50 py-2">
-                <p className="text-lg font-bold text-gray-900">{sessionSummary.structuresPracticed.length}</p>
-                <p>topics</p>
-              </div>
-            </div>
-
-            {/* Topic recommendations for next session */}
-            {topicRecs.length > 0 && (
-              <div className="space-y-1.5">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Recommended next</p>
-                {topicRecs.slice(0, 3).map((rec) => (
-                  <div key={rec.structureId} className="flex items-center justify-between rounded-lg bg-gray-50 px-3 py-2 text-xs">
-                    <span className="font-medium text-gray-700">{rec.name}</span>
-                    <span className="text-gray-400">{rec.reason}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <button
-              onClick={() => setShowSummary(false)}
-              className="w-full rounded-xl bg-gray-900 py-2.5 text-sm font-semibold text-white hover:bg-gray-800"
-            >
-              Start Next Session
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Voice error toast (e.g. daily cap hit, connection failed) */}
-      {realtimeError && !realtimeMode && (
+      {voiceError && (
         <div className="fixed top-20 left-1/2 z-50 -translate-x-1/2 transform">
           <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 shadow-lg max-w-md">
             <div className="flex-1 text-sm text-amber-900">
-              {realtimeError}
+              {voiceError}
             </div>
             <button
-              onClick={() => setRealtimeError(null)}
+              onClick={() => setVoiceError(null)}
               className="text-amber-600 hover:text-amber-800"
               aria-label="Dismiss"
             >
@@ -1016,479 +1068,132 @@ function HomeContent() {
         </div>
       )}
 
-      {/* Realtime voice conversation overlay */}
-      {realtimeMode && (() => {
-        const latestVoice = voiceTurns.length > 0 ? voiceTurns[voiceTurns.length - 1] : null;
-        const voiceActiveRule = latestVoice?.activeRule ?? null;
-        const voiceNudge = latestVoice?.deepPracticeNudge ?? null;
-        const voiceFocusName = voiceActiveRule?.structureName ?? null;
-
-        // Session-scoped error count on the candidate handoff structure.
-        // We only show the handoff CTA once the learner has struggled on this
-        // topic in THIS conversation (not just cumulative lifetime), and only
-        // if they haven't dismissed it. Progressive adaptation still happens
-        // silently via focus drilling + the active-rule card.
-        const SESSION_NUDGE_THRESHOLD = 3;
-        const nudgeSessionErrors = voiceNudge
-          ? voiceTurns.filter((t) => t.errorStructureIds.includes(voiceNudge.structureId)).length
-          : 0;
-        const showHandoffCta =
-          voiceNudge !== null &&
-          nudgeSessionErrors >= SESSION_NUDGE_THRESHOLD &&
-          !dismissedNudges.includes(voiceNudge.structureId);
-
-        function handleVoiceLessonJump(lessonId: string) {
-          realtime.disconnect();
-          setRealtimeMode(false);
-          setVoiceTurns([]);
-          setDismissedNudges([]);
-          setRealtimeTranscript("");
-          setRealtimeModelText("");
-          router.push(`/chat?lesson=${lessonId}`);
-        }
-
-        function dismissNudge(structureId: string) {
-          setDismissedNudges((prev) =>
-            prev.includes(structureId) ? prev : [...prev, structureId]
-          );
-        }
-
-        const stateLabel =
-          realtime.state === "connecting" ? "Connecting…" :
-          realtime.state === "listening" ? "Listening — speak in German" :
-          realtime.state === "thinking" ? "Analyzing your sentence…" :
-          realtime.state === "speaking" ? "Coach is speaking…" :
-          "Disconnected";
-
-        const stateColor =
-          realtime.state === "listening" ? "bg-emerald-100 text-emerald-700" :
-          realtime.state === "speaking" ? "bg-blue-100 text-blue-700" :
-          realtime.state === "thinking" ? "bg-amber-100 text-amber-700" :
-          realtime.state === "connecting" ? "bg-gray-200 text-gray-600" :
-          "bg-gray-100 text-gray-500";
-
-        return (
-          <div className="flex flex-1 overflow-hidden bg-gray-50">
-          <div className="flex flex-1 flex-col overflow-hidden">
-            {/* Compact header: state pill + focus badge */}
-            <div className="border-b border-gray-200 bg-white px-6 py-3">
-              <div className="mx-auto flex max-w-2xl items-center gap-3">
-                <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium ${stateColor}`}>
-                  <span className={`h-1.5 w-1.5 rounded-full ${
-                    realtime.state === "listening" ? "bg-emerald-600 animate-pulse" :
-                    realtime.state === "speaking" ? "bg-blue-600 animate-pulse" :
-                    realtime.state === "thinking" ? "bg-amber-600 animate-pulse" :
-                    "bg-gray-400"
-                  }`} />
-                  {stateLabel}
-                </span>
-                {voiceFocusName && (
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-gray-900 px-2.5 py-1 text-[11px] font-medium text-white">
-                    Focus: {voiceFocusName}
-                    {voiceActiveRule && voiceActiveRule.errorCount > 0 && (
-                      <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-[10px]">
-                        {voiceActiveRule.errorCount}×
-                      </span>
-                    )}
-                  </span>
-                )}
-                <button
-                  onClick={toggleRealtimeMode}
-                  className="ml-auto rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700"
-                >
-                  End Voice
-                </button>
-              </div>
-            </div>
-
-            {/* Scrollable conversation */}
-            <div
-              ref={voiceScrollContainerRef}
-              onScroll={handleVoiceScroll}
-              className="flex-1 overflow-y-auto px-6 py-6"
-            >
-              <div className="mx-auto max-w-2xl space-y-5">
-                {/* Empty-state hint */}
-                {voiceTurns.length === 0 && !realtimeTranscript && (
-                  <div className="rounded-xl border border-dashed border-gray-300 bg-white p-5 text-center">
-                    <p className="text-sm text-gray-600">
-                      Start speaking in German. I&apos;ll catch your mistakes, walk you through them,
-                      and steer our chat toward whatever needs the most work.
-                    </p>
-                  </div>
-                )}
-
-                {/* Committed turns — rich breakdown per turn */}
-                {voiceTurns.map((turn, i) => {
-                  const isLast = i === voiceTurns.length - 1;
-                  const ruleTokens: Token[] = turn.tokens.filter(
-                    (t) => (t.status === "wrong" || t.status === "warn") && (t.correction || t.rule)
-                  );
-                  return (
-                    <div key={i} className="fade-in-up space-y-3">
-                      {/* User sentence */}
-                      <div className="flex justify-end">
-                        <div className="max-w-sm rounded-2xl rounded-br-md bg-gray-900 px-4 py-3 text-sm text-white">
-                          {turn.sentence}
-                        </div>
-                      </div>
-
-                      {/* Coach card: score + response.
-                          When this is the latest turn and the coach is actively
-                          speaking it, split the text into sentences and track
-                          progress via audio_transcript length. Past sentences
-                          fade, the current one gets a soft highlight — so the
-                          learner can see which section the voice is on. */}
-                      <div className="flex gap-3">
-                        <div className="score-pop">
-                          <ScoreRing score={turn.score} size={44} />
-                        </div>
-                        <div
-                          className={`flex-1 rounded-2xl rounded-bl-md bg-white px-4 py-3 text-sm text-gray-700 transition-all duration-300 ${
-                            isLast && realtime.state === "speaking"
-                              ? "ring-2 ring-blue-300 shadow-md"
-                              : "ring-1 ring-gray-100"
-                          }`}
-                        >
-                          {(() => {
-                            const content = turn.responseText;
-                            const isSpeakingHere = isLast && realtime.state === "speaking";
-                            const spokenChars = isSpeakingHere ? realtimeModelText.length : null;
-
-                            // Split on sentence-ending punctuation (keep trailing whitespace
-                            // in the chunk so we don't re-collapse spacing). Fallback to
-                            // the whole thing if the regex matches nothing weird.
-                            const sentences = content.match(/[^.!?\n]+[.!?]+[\s\n]*|[^.!?\n]+$/g) ?? [content];
-
-                            // Running char position for each sentence's start
-                            const positions: number[] = [];
-                            let pos = 0;
-                            for (const s of sentences) {
-                              positions.push(pos);
-                              pos += s.length;
-                            }
-
-                            // Which sentence is the transcript currently in?
-                            let currentIdx = -1;
-                            if (spokenChars !== null) {
-                              for (let i = sentences.length - 1; i >= 0; i--) {
-                                if (positions[i] <= spokenChars) {
-                                  currentIdx = i;
-                                  break;
-                                }
-                              }
-                            }
-
-                            return (
-                              <div className="whitespace-pre-wrap">
-                                {sentences.map((s, i) => {
-                                  const state =
-                                    spokenChars === null ? "static" :
-                                    i < currentIdx ? "past" :
-                                    i === currentIdx ? "current" :
-                                    "future";
-                                  const cls =
-                                    state === "current"
-                                      ? "rounded bg-blue-50 px-0.5 transition-colors"
-                                      : state === "past"
-                                      ? "text-gray-400 transition-colors"
-                                      : "";
-                                  return (
-                                    <span
-                                      key={i}
-                                      className={cls}
-                                      dangerouslySetInnerHTML={{ __html: safeMarkdown(s) }}
-                                    />
-                                  );
-                                })}
-                              </div>
-                            );
-                          })()}
-
-                          {isLast && realtime.state === "speaking" && (
-                            <div className="mt-2 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-blue-500">
-                              <span className="relative flex h-1.5 w-1.5">
-                                <span className="absolute inline-flex h-1.5 w-1.5 animate-ping rounded-full bg-blue-400 opacity-75" />
-                                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-blue-500" />
-                              </span>
-                              Speaking now
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Token-level corrections */}
-                      {turn.corrections.length > 0 && (
-                        <div className="rounded-xl bg-white p-4 ring-1 ring-gray-100">
-                          <GrammarCorrection
-                            tokens={turn.tokens}
-                            score={turn.score}
-                            errorTypes={turn.corrections.map((c) => c.level)}
-                          />
-                        </div>
-                      )}
-
-                      {/* Explicit rule card on latest turn */}
-                      {isLast && turn.ruleCard && (
-                        <div className="rule-card-enter rounded-xl border border-gray-200 bg-white p-5">
-                          <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-                            {turn.ruleCard.structureName}
-                          </p>
-                          <p className="mt-2 text-sm text-gray-700">{turn.ruleCard.rule}</p>
-                          {turn.ruleCard.l1Comparison && (
-                            <p className="mt-2 text-sm text-gray-500 italic">
-                              {turn.ruleCard.l1Comparison}
-                            </p>
-                          )}
-                          <p className="mt-2 rounded-lg bg-gray-50 px-3 py-2 text-sm font-mono text-gray-600">
-                            {turn.ruleCard.example}
-                          </p>
-                        </div>
-                      )}
-
-                      {/* Per-token rule cards on latest turn */}
-                      {isLast && !turn.ruleCard && ruleTokens.length > 0 && (
-                        <div className="space-y-2">
-                          {ruleTokens.map((token, j) => (
-                            <RuleCard key={j} token={token} index={j} />
-                          ))}
-                        </div>
-                      )}
-
-                      {/* Active-rule sidebar-style card on latest turn */}
-                      {isLast && turn.activeRule && !turn.ruleCard && (
-                        <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-2">
-                          <div className="flex items-center justify-between">
-                            <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
-                              {turn.focusStructure ? "Drilling" : "Current rule"}
-                            </p>
-                            <span className="text-[10px] text-gray-400">
-                              {Math.round(turn.activeRule.mastery * 100)}% mastery
-                            </span>
-                          </div>
-                          <p className="text-sm font-medium text-gray-800">{turn.activeRule.structureName}</p>
-                          <p className="text-xs text-gray-600">{turn.activeRule.description}</p>
-                          {turn.activeRule.l1Comparison && (
-                            <p className="text-xs text-gray-500 italic">{turn.activeRule.l1Comparison}</p>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Handoff chip — silent, one-line, dismissable. The verbal drill
-                          is announced by the voice coach itself (see announcedDrillsRef).
-                          This chip just leaves a door open to the dedicated lesson. */}
-                      {isLast && showHandoffCta && voiceNudge && (
-                        <div className="fade-in-up flex items-stretch gap-1.5">
-                          <button
-                            onClick={() => handleVoiceLessonJump(voiceNudge.lessonId)}
-                            className="flex flex-1 items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-600 transition-colors hover:bg-gray-50"
-                          >
-                            <span>Focused lesson on</span>
-                            <span className="font-medium text-gray-800">{voiceNudge.structureName}</span>
-                            <span className="ml-auto text-gray-400">&rarr;</span>
-                          </button>
-                          <button
-                            onClick={() => dismissNudge(voiceNudge.structureId)}
-                            className="rounded-lg px-2 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
-                            aria-label="Dismiss"
-                            title="Dismiss for this session"
-                          >
-                            &times;
-                          </button>
-                        </div>
-                      )}
-
-                      {/* Lighter lesson suggestion — same chip style */}
-                      {isLast && !showHandoffCta && turn.lessonSuggestion && (
-                        <button
-                          onClick={() => handleVoiceLessonJump(turn.lessonSuggestion!.lessonId)}
-                          className="fade-in-up flex w-full items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-600 transition-colors hover:bg-gray-50"
-                        >
-                          <span className="truncate">{turn.lessonSuggestion.message}</span>
-                          <span className="ml-auto shrink-0 text-gray-400">&rarr;</span>
-                        </button>
-                      )}
-
-                      {/* Try-next suggestion — visual only. Coach does NOT speak this;
-                          the learner decides when they're ready to respond. The
-                          nextPrompt comes from Claude in the coach language, so we
-                          avoid any hard-coded English label here. */}
-                      {isLast && turn.nextPrompt && (
-                        <div className="fade-in-up flex items-start gap-2 rounded-lg border border-dashed border-gray-300 bg-gray-50 px-3 py-2.5">
-                          <span className="mt-0.5 text-gray-400">&#8250;</span>
-                          <p className="flex-1 text-sm text-gray-600">{turn.nextPrompt}</p>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-
-                {/* In-flight live transcript (user currently speaking) */}
-                {realtimeTranscript && (
-                  <div className="fade-in-up flex justify-end">
-                    <div className="max-w-sm rounded-2xl rounded-br-md bg-gray-900/80 px-4 py-3 text-sm text-white">
-                      {realtimeTranscript}
-                      <span className="ml-1 inline-block h-3 w-1 animate-pulse bg-white/60 align-middle" />
-                    </div>
-                  </div>
-                )}
-
-                {/* Analyzing indicator while tool call is in flight */}
-                {realtime.state === "thinking" && (
-                  <div className="fade-in-up flex gap-3">
-                    <div className="w-[44px]" />
-                    <div className="rounded-2xl rounded-bl-md bg-white px-4 py-3 text-sm text-gray-400 ring-1 ring-gray-100">
-                      <span className="inline-flex items-center gap-1">
-                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:0ms]" />
-                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:150ms]" />
-                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:300ms]" />
-                        <span className="ml-2">Checking your grammar…</span>
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Live transcription of what the coach is currently saying —
-                    accumulates via response.audio_transcript.delta and sits
-                    directly under the last turn card so the learner can see
-                    the spoken text unfold in real time. */}
-                {realtimeModelText && realtime.state === "speaking" && (
-                  <div className="fade-in-up flex gap-3">
-                    <div className="w-[44px]" />
-                    <div className="flex-1 rounded-lg border border-dashed border-blue-200 bg-blue-50/40 px-3 py-2 text-[13px] italic text-blue-700/80">
-                      <span className="mr-2 text-[10px] font-semibold uppercase not-italic tracking-wider text-blue-400">
-                        Live
-                      </span>
-                      {realtimeModelText}
-                    </div>
-                  </div>
-                )}
-
-                <div ref={voiceScrollRef} />
-              </div>
-            </div>
-          </div>
-
-          {/* Voice-mode right rail — muted mirror of quick-practice sidebar.
-              Same data (weak structures, frequent mistakes, active rule),
-              calmer styling so it doesn't compete with the conversation.
-              Desktop-only to keep mobile immersive. */}
-          <aside className="hidden lg:flex w-60 shrink-0 flex-col border-l border-gray-200 bg-white/70 overflow-y-auto">
-            <div className="px-4 py-4 space-y-5">
-              {/* Active rule (muted) */}
-              {voiceActiveRule && (
-                <div className="rounded-lg border border-gray-100 bg-gray-50/50 p-3 space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <p className="text-[9px] font-semibold uppercase tracking-wider text-gray-400">
-                      {voiceActiveRule.structureId === convState?.focusStructure ? "Drilling" : "Current rule"}
-                    </p>
-                    <span className="text-[9px] text-gray-400">
-                      {Math.round(voiceActiveRule.mastery * 100)}%
-                    </span>
-                  </div>
-                  <p className="text-xs font-medium text-gray-700">{voiceActiveRule.structureName}</p>
-                  <p className="text-[11px] text-gray-500 leading-snug">{voiceActiveRule.description}</p>
-                </div>
-              )}
-
-              {/* Weak areas */}
-              {weakList.length > 0 && (
-                <div>
-                  <p className="text-[9px] font-medium uppercase tracking-wider text-gray-400 mb-2">
-                    Focus areas
-                  </p>
-                  <div className="space-y-1.5">
-                    {weakList.map((s) => (
-                      <div key={s.id} className="space-y-1">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[11px] text-gray-500 truncate">{s.name}</span>
-                          <span className="text-[9px] text-gray-400">{Math.round(s.mastery * 100)}%</span>
-                        </div>
-                        <div className="h-0.5 w-full rounded-full bg-gray-100">
-                          <div
-                            className="h-full rounded-full bg-gray-300 transition-all"
-                            style={{ width: `${Math.max(Math.round(s.mastery * 100), 2)}%` }}
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Frequent mistakes */}
-              {topMistakes.length > 0 && (
-                <div>
-                  <p className="text-[9px] font-medium uppercase tracking-wider text-gray-400 mb-2">
-                    Frequent mistakes
-                  </p>
-                  <div className="space-y-2">
-                    {topMistakes.map((err) => (
-                      <div key={err.id} className="text-[11px]">
-                        <div className="flex items-baseline gap-1.5">
-                          <span className="text-red-400 line-through">{err.example}</span>
-                          <span className="text-gray-300">&rarr;</span>
-                          <span className="text-green-500">{err.correction}</span>
-                        </div>
-                        <p className="text-[9px] text-gray-400">{err.count}x</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {weakList.length === 0 && topMistakes.length === 0 && (
-                <p className="text-[11px] text-gray-400 italic">
-                  Your weak areas and frequent mistakes will show up here as you practice.
-                </p>
-              )}
-            </div>
-          </aside>
-          </div>
-        );
-      })()}
-
       {/* Main area: conversation + sidebar */}
-      {!realtimeMode && <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden">
+
+      {/* Left rail — pinned reference cards. Hidden when no pins exist; the
+          newest pin sits at the bottom (closest to the chat input). */}
+      {showLeftRail && (
+        <aside className="hidden lg:flex w-72 shrink-0 flex-col border-r border-gray-200 bg-paper">
+          <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2.5">
+            <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-gray-400">
+              Pinned references
+            </p>
+            <span className="text-[10px] text-gray-400">{pinnedStructureDefs.length}</span>
+          </div>
+          <div className="flex flex-1 flex-col justify-end overflow-y-auto px-4 py-3 gap-3">
+            {pinnedStructureDefs.map((def) => {
+              const l1 = learnerModel?.nativeLanguage
+                ? def.l1Interference[learnerModel.nativeLanguage] ?? null
+                : null;
+              const lessonId = getLessonForStructure(def.id);
+              return (
+                <div
+                  key={def.id}
+                  className="rounded-xl border border-line bg-paper-warm p-3 space-y-2"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-gray-900 truncate">{def.name}</p>
+                      <p className="text-[11px] text-gray-500">{def.cefrLevel}</p>
+                    </div>
+                    <button
+                      onClick={() => unpinStructure(def.id)}
+                      aria-label={`Unpin ${def.name}`}
+                      title="Unpin"
+                      className="rounded-md p-1 text-gray-400 hover:bg-white hover:text-gray-700"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                      </svg>
+                    </button>
+                  </div>
+                  {def.whyThisHappens ? (
+                    <p className="text-[12px] leading-snug text-gray-700">{def.whyThisHappens}</p>
+                  ) : (
+                    <p className="text-[12px] leading-snug text-gray-700">{def.description}</p>
+                  )}
+                  {def.grammarTable && (
+                    <GrammarTable table={def.grammarTable} mode="compact" />
+                  )}
+                  {l1 && (
+                    <div className="rounded-lg border border-gray-100 bg-paper px-2.5 py-2">
+                      <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400 mb-0.5">
+                        In your language
+                      </p>
+                      <p className="text-[11px] leading-snug italic text-gray-600">{l1}</p>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    <button
+                      onClick={() => router.push(`/study/${encodeURIComponent(def.id)}`)}
+                      className="rounded-lg border border-line-2 bg-white px-2.5 py-1.5 text-[11px] font-medium text-gray-600 transition-colors hover:bg-gray-50"
+                    >
+                      Open
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (lessonId) router.push(`/chat?lesson=${lessonId}`);
+                      }}
+                      disabled={!lessonId}
+                      className="rounded-lg bg-gray-900 px-2.5 py-1.5 text-[11px] font-medium text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-400"
+                    >
+                      Focus lesson
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </aside>
+      )}
 
       {/* Conversation column */}
       <div className="flex flex-1 flex-col overflow-hidden">
       <div className="flex-1 overflow-y-auto px-6 py-6">
         <div className="mx-auto max-w-lg space-y-5">
-          {/* Topic recommendations — shown at start of session before any turns */}
-          {topicRecs.length > 0 && turns.length === 0 && opener && (
-            <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-4 space-y-2">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Today&apos;s focus</p>
-              <div className="flex flex-wrap gap-2">
-                {topicRecs.slice(0, 4).map((rec) => (
-                  <span
-                    key={rec.structureId}
-                    className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] ${
-                      rec.priority <= 2
-                        ? "bg-gray-900 text-white"
-                        : "bg-gray-200 text-gray-600"
-                    }`}
-                    title={rec.reason}
-                  >
-                    {rec.name}
-                  </span>
-                ))}
-              </div>
+          {/* Today's focus — calm, honest opener.
+              The full daily-warm-up landing (heatmap + weekly progress) is a
+              brief Day 6-7 deferral that lives on `/`, not here. */}
+          {turns.length === 0 && opener && (
+            <div className="rounded-xl border border-line bg-paper-warm p-5 shadow-sm">
+              <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-mute">
+                Today&apos;s focus
+              </p>
+              <p className="mt-2 font-serif text-2xl font-medium tracking-[-0.01em] text-ink">
+                {dailyPromptFocus
+                  ? <>Start with <span className="bg-warm-bg px-1.5 py-0.5 rounded">{dailyPromptFocus}</span>.</>
+                  : "Start anywhere you'd like."}
+              </p>
+              <p className="mt-1 text-xs text-mute">
+                {priorSessionCount > 0
+                  ? `Picks up from your last ${priorSessionCount === 1 ? "session" : `${priorSessionCount} sessions`}.`
+                  : "Your first session — say anything to begin."}
+              </p>
+              {topicRecs.length > 1 && (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {topicRecs.slice(1, 4).map((rec) => (
+                    <button
+                      key={rec.structureId}
+                      onClick={() => router.push(`/study/${encodeURIComponent(rec.structureId)}`)}
+                      className="rounded-full bg-paper px-2.5 py-1 text-[11px] text-ink-2 ring-1 ring-line-2 transition-colors hover:bg-line-2"
+                      title={`${rec.reason} — open study card`}
+                    >
+                      {rec.name}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
           {/* Session opener */}
           {opener && (
-            <div className="fade-in-up flex items-start gap-2">
-              <div className="flex-1 rounded-2xl rounded-bl-md bg-white px-4 py-3 text-sm text-gray-700 ring-1 ring-gray-100">
+            <div className="fade-in-up">
+              <div className="rounded-2xl rounded-bl-md bg-white px-4 py-3 text-sm text-gray-700 ring-1 ring-gray-100">
                 {opener}
               </div>
-              {ttsSupported && (
-                <SpeakButton
-                  onClick={() => handleSpeak(opener, -1)}
-                  speaking={speakingIdx === -1 && speaking}
-                />
-              )}
             </div>
           )}
 
@@ -1504,7 +1209,7 @@ function HomeContent() {
 
               {/* Coach response */}
               <div className="space-y-3">
-                {/* Score + response text + speak button */}
+                {/* Score + response text */}
                 <div className="flex gap-3">
                   <div className="score-pop">
                     <ScoreRing score={turn.result.score} size={44} />
@@ -1514,15 +1219,6 @@ function HomeContent() {
                       __html: safeMarkdown(turn.result.responseText)
                     }} />
                   </div>
-                  {ttsSupported && (
-                    <SpeakButton
-                      onClick={() => handleSpeak(
-                        turn.result.responseText + ". " + turn.result.nextPrompt,
-                        i
-                      )}
-                      speaking={speakingIdx === i && speaking}
-                    />
-                  )}
                 </div>
 
                 {/* Corrections */}
@@ -1537,22 +1233,57 @@ function HomeContent() {
                 )}
 
                 {/* Rule card (explicit level, latest turn) */}
-                {i === turns.length - 1 && turn.result.ruleCard && (
-                  <div className="rule-card-enter rounded-xl border border-gray-200 bg-white p-5">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-                      {turn.result.ruleCard.structureName}
-                    </p>
-                    <p className="mt-2 text-sm text-gray-700">{turn.result.ruleCard.rule}</p>
-                    {turn.result.ruleCard.l1Comparison && (
-                      <p className="mt-2 text-sm text-gray-500 italic">
-                        {turn.result.ruleCard.l1Comparison}
+                {i === turns.length - 1 && turn.result.ruleCard && (() => {
+                  const ruleStaticDef = GRAMMAR_STRUCTURES.find(
+                    (s) => s.id === turn.result.ruleCard?.structureId
+                  );
+                  const ruleStructureId = turn.result.ruleCard.structureId;
+                  const isPinned = pinnedStructureIds.includes(ruleStructureId);
+                  return (
+                    <div className="rule-card-enter rounded-xl border border-line bg-paper-warm p-5">
+                      <div className="mb-3 flex items-center justify-between gap-2">
+                        <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+                          {turn.result.ruleCard.structureName}
+                        </p>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => togglePinStructure(ruleStructureId)}
+                            aria-label={isPinned ? "Unpin from sidebar" : "Pin to sidebar"}
+                            title={isPinned ? "Unpin from sidebar" : "Pin to sidebar"}
+                            className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 transition-colors ${
+                              isPinned
+                                ? "bg-gray-900 text-white ring-gray-900 hover:bg-gray-800"
+                                : "bg-white text-gray-500 ring-line-2 hover:bg-gray-50 hover:text-gray-700"
+                            }`}
+                          >
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill={isPinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M12 17v5" />
+                              <path d="M9 10.76V6h6v4.76l3 3V17H6v-3.24l3-3z" />
+                            </svg>
+                            {isPinned ? "Pinned" : "Pin"}
+                          </button>
+                          <span className="rounded-full bg-white px-2 py-0.5 text-[10px] text-gray-400 ring-1 ring-line-2">
+                            inline
+                          </span>
+                        </div>
+                      </div>
+                      <p className="mt-2 text-sm text-gray-700">{turn.result.ruleCard.rule}</p>
+                      {turn.result.ruleCard.l1Comparison && (
+                        <p className="mt-2 text-sm text-gray-500 italic">
+                          {turn.result.ruleCard.l1Comparison}
+                        </p>
+                      )}
+                      <p className="mt-2 rounded-lg bg-white px-3 py-2 text-sm font-mono text-gray-600 ring-1 ring-line-2">
+                        {turn.result.ruleCard.example}
                       </p>
-                    )}
-                    <p className="mt-2 rounded-lg bg-gray-50 px-3 py-2 text-sm font-mono text-gray-600">
-                      {turn.result.ruleCard.example}
-                    </p>
-                  </div>
-                )}
+                      {ruleStaticDef?.grammarTable && (
+                        <div className="mt-3">
+                          <GrammarTable table={ruleStaticDef.grammarTable} mode="compact" />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* Token-level rule cards (latest turn, no explicit card) */}
                 {i === turns.length - 1 && !turn.result.ruleCard && ruleTokens.length > 0 && (
@@ -1563,21 +1294,7 @@ function HomeContent() {
                   </div>
                 )}
 
-                {/* Deep practice nudge — prominent when error pattern is clear */}
-                {i === turns.length - 1 && turn.result.deepPracticeNudge && (
-                  <div className="fade-in-up rounded-xl border-2 border-gray-900 bg-gray-50 p-4 space-y-3">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-                      Your tutor recommends
-                    </p>
-                    <p className="text-sm text-gray-700">{turn.result.deepPracticeNudge.message}</p>
-                    <button
-                      onClick={() => router.push(`/chat?lesson=${turn.result.deepPracticeNudge!.lessonId}`)}
-                      className="w-full rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-gray-800 transition-colors"
-                    >
-                      Start focused practice
-                    </button>
-                  </div>
-                )}
+                {/* Deep practice nudge has moved to the bottom of the right rail. */}
 
                 {/* Lesson suggestion — lighter version for 2 errors */}
                 {i === turns.length - 1 && !turn.result.deepPracticeNudge && turn.result.lessonSuggestion && (
@@ -1597,16 +1314,10 @@ function HomeContent() {
 
                 {/* Next prompt */}
                 {i === turns.length - 1 && turn.result.nextPrompt && (
-                  <div className="fade-in-up flex items-start gap-2">
-                    <div className="flex-1 rounded-xl border border-dashed border-gray-300 bg-gray-50 p-4 text-center">
+                  <div className="fade-in-up">
+                    <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-4 text-center">
                       <p className="text-sm text-gray-600">{turn.result.nextPrompt}</p>
                     </div>
-                    {ttsSupported && (
-                      <SpeakButton
-                        onClick={() => handleSpeak(turn.result.nextPrompt, i + 1000)}
-                        speaking={speakingIdx === i + 1000 && speaking}
-                      />
-                    )}
                   </div>
                 )}
               </div>
@@ -1635,11 +1346,7 @@ function HomeContent() {
                 </div>
               ) : (
                 <div className="rounded-2xl rounded-bl-md bg-white px-4 py-3 text-sm text-gray-400 ring-1 ring-gray-100">
-                  <span className="inline-flex items-center gap-1">
-                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:0ms]" />
-                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:150ms]" />
-                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:300ms]" />
-                  </span>
+                  <ThinkingMark label="Checking..." />
                 </div>
               )}
             </div>
@@ -1649,12 +1356,28 @@ function HomeContent() {
           {loading && !streamingSentence && (
             <div className="fade-in-up">
               <div className="rounded-2xl rounded-bl-md bg-white px-4 py-3 text-sm text-gray-400 ring-1 ring-gray-100">
-                <span className="inline-flex items-center gap-1">
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:0ms]" />
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:150ms]" />
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:300ms]" />
-                  <span className="ml-2">Thinking&hellip;</span>
-                </span>
+                <ThinkingMark label="Thinking..." />
+              </div>
+            </div>
+          )}
+
+          {/* Pending voice bubbles — live transcript while user speaks, and
+              streaming coach text while coach is replying. Cleared once the
+              tool returns a finalized analysis (which appends to turns). */}
+          {voiceConnected && pendingTranscript && (
+            <div className="flex justify-end fade-in-up">
+              <div className="max-w-sm rounded-2xl rounded-br-md bg-gray-900/80 px-4 py-3 text-sm text-white">
+                {pendingTranscript}
+                <span className="ml-1 inline-block h-3.5 w-1 animate-pulse bg-white/60 align-text-bottom" />
+              </div>
+            </div>
+          )}
+          {voiceConnected && pendingModelText && realtime.state === "speaking" && (
+            <div className="fade-in-up flex gap-3">
+              <div className="w-[44px]" />
+              <div className="flex-1 rounded-2xl rounded-bl-md bg-white px-4 py-3 text-sm text-gray-700 ring-1 ring-gray-100">
+                <div className="whitespace-pre-wrap">{pendingModelText}</div>
+                <span className="inline-block h-4 w-1.5 animate-pulse bg-gray-400 align-text-bottom ml-0.5" />
               </div>
             </div>
           )}
@@ -1663,21 +1386,92 @@ function HomeContent() {
         </div>
       </div>
 
-      {/* Input bar — mic + text + send */}
-      <div className="border-t border-gray-200 bg-white px-6 py-3">
+      {/* Input bar — realtime voice mic when supported, speech-to-text fallback
+          otherwise, plus text + send. */}
+      <div className="shrink-0 border-t border-gray-200 bg-white px-6 py-3">
+        {voiceConnected && (
+          <div className="mx-auto mb-2 flex max-w-lg items-center justify-center gap-2">
+            <span
+              className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-medium ${
+                realtime.state === "listening"
+                  ? "bg-emerald-100 text-emerald-700"
+                  : realtime.state === "speaking"
+                    ? "bg-blue-100 text-blue-700"
+                    : realtime.state === "thinking"
+                      ? "bg-amber-100 text-amber-700"
+                      : "bg-gray-100 text-gray-500"
+              }`}
+            >
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  realtime.state === "listening"
+                    ? "bg-emerald-600 animate-pulse"
+                    : realtime.state === "speaking"
+                      ? "bg-blue-600 animate-pulse"
+                      : realtime.state === "thinking"
+                        ? "bg-amber-600 animate-pulse"
+                        : "bg-gray-400"
+                }`}
+              />
+              {realtime.state === "connecting" && "Connecting…"}
+              {realtime.state === "listening" && "Listening"}
+              {realtime.state === "speaking" && "Speaking"}
+              {realtime.state === "thinking" && "Analyzing"}
+            </span>
+            <button
+              onClick={() => realtime.disconnect()}
+              className="rounded-full bg-red-100 px-2.5 py-0.5 text-[11px] font-medium text-red-700 hover:bg-red-200"
+            >
+              End voice
+            </button>
+          </div>
+        )}
         <div className="mx-auto flex max-w-lg gap-2">
-          <SpeechButton
-            onResult={handleSpeechResult}
-            onInterim={(text) => setInput(text)}
-            onListeningChange={handleListeningChange}
-            disabled={loading || speaking}
-          />
+          {realtime.isSupported ? (
+            <button
+              onClick={toggleVoice}
+              disabled={loading || speaking || realtime.state === "connecting"}
+              className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition-all ${
+                voiceConnected
+                  ? "bg-red-500 text-white shadow-lg shadow-red-200"
+                  : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+              } disabled:cursor-not-allowed disabled:opacity-40`}
+              title={voiceConnected ? "End realtime voice" : "Start realtime voice"}
+              aria-label={voiceConnected ? "End realtime voice" : "Start realtime voice"}
+            >
+              {voiceConnected ? (
+                <div className="relative">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                    <line x1="12" y1="19" x2="12" y2="23" />
+                    <line x1="8" y1="23" x2="16" y2="23" />
+                  </svg>
+                  <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-white animate-ping" />
+                </div>
+              ) : (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                  <line x1="12" y1="19" x2="12" y2="23" />
+                  <line x1="8" y1="23" x2="16" y2="23" />
+                </svg>
+              )}
+            </button>
+          ) : (
+            <SpeechButton
+              onResult={handleSpeechResult}
+              onInterim={(text) => setInput(text)}
+              onListeningChange={handleListeningChange}
+              disabled={loading || speaking || voiceConnected}
+            />
+          )}
           <textarea
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Write or speak a German sentence..."
+            placeholder={voiceConnected ? "Voice mode active — speak or type" : "Write or speak a German sentence..."}
             rows={1}
             className="flex-1 resize-none rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-800 placeholder-gray-400 outline-none transition-colors focus:border-gray-900 focus:ring-2 focus:ring-gray-200"
           />
@@ -1692,50 +1486,138 @@ function HomeContent() {
       </div>
       </div>{/* end conversation column */}
 
-      {/* Right sidebar — grammar rules + weak areas */}
-      <aside className="hidden lg:flex w-64 shrink-0 flex-col border-l border-gray-200 bg-white overflow-y-auto">
-        <div className="px-4 py-4 space-y-5">
-          {/* Active grammar rule — shown during drilling or after errors */}
-          {latestActiveRule && (
-            <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-3">
+      {/* Right sidebar — vocab, activity, grammar rules, weak areas. The
+          deep-practice nudge is anchored at the bottom so it aligns with the
+          chat input rather than scrolling away inline. */}
+      <aside
+        className={`hidden lg:flex shrink-0 flex-col border-l border-gray-200 bg-white transition-[width] duration-200 ${
+          rightRailCollapsed ? "w-10" : "w-80"
+        }`}
+      >
+        <div className="flex items-center justify-end px-2 pt-3 shrink-0">
+          <button
+            onClick={() => setRightRailCollapsed((v) => !v)}
+            aria-label={rightRailCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className="rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              {rightRailCollapsed ? <path d="M15 18l-6-6 6-6" /> : <path d="M9 18l6-6-6-6" />}
+            </svg>
+          </button>
+        </div>
+        {!rightRailCollapsed && (
+        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-5">
+          {/* Vocabulary — today's deck pulse */}
+          <VocabCard />
+
+          {/* Activity — week progress + 14-week heatmap */}
+          <ActivityCard />
+
+          {/* Current turn analysis — keep the live tutor diagnosis visible in
+              the right rail, matching the older quick-practice feel. */}
+          {lastResult && (
+            <div className="rounded-xl border border-line bg-paper-warm p-4 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                  Current analysis
+                </p>
+                <ScoreRing score={lastResult.score} size={36} />
+              </div>
+
+              {currentAnalysisCorrections.length > 0 ? (
+                <div className="space-y-2">
+                  {currentAnalysisCorrections.slice(0, 3).map((correction, idx) => (
+                    <div key={`${correction.original}-${idx}`} className="rounded-lg bg-white px-3 py-2 text-[11px] ring-1 ring-line-2">
+                      <div className="text-red-500 line-through">{correction.original}</div>
+                      <div className="font-medium text-green-700">{correction.correction}</div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="rounded-lg bg-white px-3 py-2 text-[12px] text-gray-600 ring-1 ring-line-2">
+                  No correction needed on the latest turn.
+                </p>
+              )}
+
+              {(latestRuleForSidebar || latestRuleCardForSidebar) && (() => {
+                const structureId =
+                  latestRuleCardForSidebar?.structureId ??
+                  latestRuleForSidebar?.structureId ??
+                  null;
+                const title =
+                  latestRuleCardForSidebar?.structureName ??
+                  latestRuleForSidebar?.structureName ??
+                  "Grammar focus";
+                const description =
+                  latestRuleCardForSidebar?.rule ??
+                  latestRuleForSidebar?.description ??
+                  "";
+                const isPinned = !!structureId && pinnedStructureIds.includes(structureId);
+
+                return (
+                  <div className="rounded-lg bg-white px-3 py-2 ring-1 ring-line-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-[12px] font-semibold text-gray-800">{title}</p>
+                        {description && (
+                          <p className="mt-1 text-[11px] leading-snug text-gray-600">{description}</p>
+                        )}
+                      </div>
+                      {structureId && (
+                        <button
+                          onClick={() => togglePinStructure(structureId)}
+                          className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 transition-colors ${
+                            isPinned
+                              ? "bg-gray-900 text-white ring-gray-900"
+                              : "bg-gray-50 text-gray-500 ring-line-2 hover:bg-gray-100"
+                          }`}
+                        >
+                          {isPinned ? "Pinned" : "Pin"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* Mistake of the day */}
+          {mistakeOfTheDay && (
+            <div className="rounded-xl border border-line bg-paper-warm p-4 space-y-3">
               <div className="flex items-center justify-between">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
-                  {convState?.focusStructure ? "Drilling" : "Current Rule"}
+                  Mistake of the day
                 </p>
                 <span className="text-[10px] text-gray-400">
-                  {Math.round(latestActiveRule.mastery * 100)}% mastery
+                  {mistakeOfTheDay.count}x
                 </span>
               </div>
-              <div>
-                <p className="text-sm font-medium text-gray-800">{latestActiveRule.structureName}</p>
-                <p className="mt-1 text-xs text-gray-600">{latestActiveRule.description}</p>
+              <div className="space-y-1.5 text-[12px] leading-relaxed">
+                <div className="text-red-500 line-through">{mistakeOfTheDay.example}</div>
+                <div className="font-medium text-green-700">{mistakeOfTheDay.correction}</div>
               </div>
-              {latestActiveRule.l1Comparison && (
-                <div className="rounded-lg bg-white px-3 py-2 border border-gray-100">
-                  <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400 mb-1">
-                    In your language
-                  </p>
-                  <p className="text-xs text-gray-600 italic">{latestActiveRule.l1Comparison}</p>
-                </div>
-              )}
-              {latestActiveRule.errorCount > 0 && (
-                <p className="text-[10px] text-gray-400">
-                  {latestActiveRule.errorCount} mistake{latestActiveRule.errorCount !== 1 ? "s" : ""} so far
-                </p>
-              )}
-              {latestActiveRule.lessonId && (
+              <p className="text-[11px] leading-snug text-gray-500">
+                {mistakeStructure?.name ?? mistakeOfTheDay.pattern} · {formatRecency(mistakeOfTheDay.lastSeen)}
+              </p>
+              {mistakeStructure && (
                 <button
-                  onClick={() => router.push(`/chat?lesson=${latestActiveRule!.lessonId}`)}
-                  className="w-full rounded-lg bg-gray-900 px-3 py-2 text-[11px] font-medium text-white hover:bg-gray-800 transition-colors"
+                  onClick={() => {
+                    const lessonId = getLessonForStructure(mistakeStructure.id);
+                    if (lessonId) router.push(`/chat?lesson=${lessonId}`);
+                  }}
+                  className="w-full rounded-lg bg-gray-900 px-3 py-2 text-[11px] font-medium text-white transition-colors hover:bg-gray-800"
                 >
-                  Deep practice this topic
+                  Drill 30 seconds
                 </button>
               )}
             </div>
           )}
 
+          {/* Reference card and active-rule card now live in the left rail. */}
+
           {/* Cross-session alerts */}
-          {persistentAlerts.filter((a) => a.severity === "intervention").length > 0 && (
+          {persistentAlerts.filter((a) => a.severity === "intervention").length > 0 && !mistakeOfTheDay && (
             <div>
               <p className="text-[10px] font-medium uppercase tracking-wider text-red-500 mb-2">Needs attention</p>
               <div className="space-y-1.5">
@@ -1749,35 +1631,17 @@ function HomeContent() {
             </div>
           )}
 
-          {/* Weak areas */}
-          {weakList.length > 0 && (
-            <div>
-              <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400 mb-2">Focus areas</p>
-              <div className="space-y-1.5">
-                {weakList.map((s) => (
-                  <div key={s.id} className="space-y-1">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] text-gray-600 truncate">{s.name}</span>
-                      <span className="text-[10px] text-gray-400">{Math.round(s.mastery * 100)}%</span>
-                    </div>
-                    <div className="h-0.5 w-full rounded-full bg-gray-100">
-                      <div
-                        className="h-full rounded-full bg-gray-400 transition-all"
-                        style={{ width: `${Math.max(Math.round(s.mastery * 100), 2)}%` }}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          {/* Focus areas moved to the sticky bottom group, beneath the chat
+              input — easier to glance at while practising. */}
 
           {/* Top mistakes */}
-          {topMistakes.length > 0 && (
+          {topMistakes.length > 1 && (
             <div>
-              <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400 mb-2">Frequent mistakes</p>
+              <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400 mb-2">
+                {topMistakes.length - 1} more to review
+              </p>
               <div className="space-y-2">
-                {topMistakes.map((err) => (
+                {topMistakes.slice(1, 4).map((err) => (
                   <div key={err.id} className="text-[11px]">
                     <div className="flex items-baseline gap-1.5">
                       <span className="text-red-500 line-through">{err.example}</span>
@@ -1799,9 +1663,53 @@ function HomeContent() {
             Full overview &rarr;
           </button>
         </div>
+        )}
+        {!rightRailCollapsed && (weakList.length > 0 || latestDeepPracticeNudge) && (
+          <div className="shrink-0 border-t border-gray-200 bg-gray-50">
+            {weakList.length > 0 && (
+              <div className="border-b border-gray-200 px-4 py-3 space-y-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                  Focus areas
+                </p>
+                <div className="space-y-1.5">
+                  {weakList.map((s) => (
+                    <div key={s.id} className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] text-gray-600 truncate">{s.name}</span>
+                        <span className="text-[10px] text-gray-400">{Math.round(s.mastery * 100)}%</span>
+                      </div>
+                      <div className="h-0.5 w-full rounded-full bg-gray-200">
+                        <div
+                          className="h-full rounded-full bg-gray-400 transition-all"
+                          style={{ width: `${Math.max(Math.round(s.mastery * 100), 2)}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {latestDeepPracticeNudge && (
+              <div className="px-4 py-3 space-y-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                  Your tutor recommends
+                </p>
+                <p className="text-[12px] leading-snug text-gray-700">
+                  {latestDeepPracticeNudge.message}
+                </p>
+                <button
+                  onClick={() => router.push(`/chat?lesson=${latestDeepPracticeNudge.lessonId}`)}
+                  className="w-full rounded-lg bg-gray-900 px-3 py-2 text-[11px] font-semibold text-white hover:bg-gray-800 transition-colors"
+                >
+                  Start focused practice
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </aside>
 
-      </div>}{/* end main flex area (conditional) */}
+      </div>{/* end main flex area */}
     </div>
   );
 }
@@ -1809,7 +1717,9 @@ function HomeContent() {
 export default function Home() {
   return (
     <AuthGuard>
-      <HomeContent />
+      <Suspense fallback={<div className="flex h-screen items-center justify-center bg-gray-50"><p className="text-sm text-gray-400">Loading…</p></div>}>
+        <HomeContent />
+      </Suspense>
     </AuthGuard>
   );
 }

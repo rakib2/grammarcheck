@@ -8,15 +8,15 @@ import { CefrLevel, UserLessonProgress, LearnerModel, ErrorPattern } from "@/typ
 import { generateLearningPath, PathItem, getLessonForStructure } from "@/lib/learningPath";
 import { useAuth } from "@/lib/AuthContext";
 import { loadLearnerModel } from "@/lib/learnerModelSync";
+import MasteryGrid from "@/components/MasteryGrid";
 import {
-  loadSnapshots,
-  loadSummaries,
   getAggregateTrend,
   detectPersistentErrors,
   MasterySnapshot,
   SessionSummary,
   PersistentErrorAlert,
 } from "@/lib/sessionMemory";
+import { loadSnapshots, loadSummaries } from "@/lib/sessionMemorySync";
 
 export default function ProgressPage() {
   const router = useRouter();
@@ -43,9 +43,11 @@ export default function ProgressPage() {
         setLearnerModel(model);
         setLearningPath(generateLearningPath(model));
 
-        // Load cross-session data
-        const snaps = loadSnapshots();
-        const sums = loadSummaries();
+        // Load cross-session data — Supabase first, localStorage fallback
+        const [snaps, sums] = await Promise.all([
+          loadSnapshots(userId),
+          loadSummaries(userId),
+        ]);
         setSnapshots(snaps);
         setSummaries(sums);
         setPersistentAlerts(detectPersistentErrors(model, snaps));
@@ -93,28 +95,30 @@ export default function ProgressPage() {
 
   if (loading) {
     return (
-      <div className="flex flex-1 items-center justify-center">
-        <p className="text-sm text-gray-400">Loading...</p>
+      <div className="flex flex-1 items-center justify-center bg-bg">
+        <p className="text-sm text-mute">Loading…</p>
       </div>
     );
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-6 py-6">
+    <div className="flex-1 overflow-y-auto bg-bg px-6 py-8">
       <div className="mx-auto max-w-2xl space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-bold text-gray-900">Overview</h1>
-            <p className="text-sm text-gray-500">
-              {learnerModel
-                ? `${learnerModel.detectedLevel} · ${learnerModel.totalTurns} sentences analyzed`
-                : "Structured lessons · CEFR A1–C2"}
+            <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-mute">
+              Overview
             </p>
+            <h1 className="mt-1 font-serif text-3xl font-medium tracking-[-0.015em] text-ink">
+              {learnerModel
+                ? `${learnerModel.detectedLevel} · ${learnerModel.totalTurns} sentences analysed`
+                : "Structured lessons across CEFR A1–C2"}
+            </h1>
           </div>
           <button
             onClick={() => router.push("/")}
-            className="rounded-lg bg-gray-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-gray-800"
+            className="rounded-full bg-ink px-4 py-2 text-sm font-medium text-paper transition-opacity hover:opacity-90"
           >
             Quick Practice
           </button>
@@ -127,11 +131,23 @@ export default function ProgressPage() {
             { label: "Lessons", value: `${totalCompleted}/${CURRICULUM.length}` },
             { label: "Structures", value: String(learnerModel?.structures.length ?? 0) },
           ].map((stat) => (
-            <div key={stat.label} className="rounded-xl bg-white p-3 ring-1 ring-gray-100">
-              <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400">{stat.label}</p>
-              <p className="mt-0.5 text-lg font-bold text-gray-900">{stat.value}</p>
+            <div key={stat.label} className="rounded-xl bg-paper p-3 border border-line">
+              <p className="text-[10px] font-medium uppercase tracking-wider text-mute">{stat.label}</p>
+              <p className="mt-0.5 text-lg font-bold text-ink">{stat.value}</p>
             </div>
           ))}
+        </div>
+
+        {/* Mastery — colored grid of every structure the learner has touched.
+            Filtered to attempts > 0 so unseen structures don't add noise on
+            the Overview surface. The full grid (including locked + unseen)
+            is reachable later via /study/<id> drill-down. */}
+        <div className="rounded-xl bg-paper p-5 border border-line">
+          <h2 className="text-sm font-semibold text-ink">Mastery</h2>
+          <p className="mb-4 mt-0.5 text-xs text-mute">
+            Colored by what you can do today. Click any to study the rule.
+          </p>
+          <MasteryGrid model={learnerModel} onlyTouched showLegend />
         </div>
 
         {/* Mastery Trend — cross-session progress visualization */}
@@ -141,9 +157,9 @@ export default function ProgressPage() {
 
         {/* Persistent Error Alerts */}
         {persistentAlerts.filter((a) => a.severity !== "watch").length > 0 && (
-          <div className="rounded-xl bg-white p-5 ring-1 ring-gray-100">
-            <h2 className="text-sm font-semibold text-gray-800">Persistent Challenges</h2>
-            <p className="mb-4 mt-0.5 text-xs text-gray-400">
+          <div className="rounded-xl bg-paper p-5 border border-line">
+            <h2 className="text-sm font-semibold text-ink">Persistent Challenges</h2>
+            <p className="mb-4 mt-0.5 text-xs text-mute">
               These keep coming up across sessions
             </p>
             <div className="space-y-2">
@@ -169,7 +185,7 @@ export default function ProgressPage() {
                     {lessonId && (
                       <button
                         onClick={() => router.push(`/chat?lesson=${lessonId}`)}
-                        className="shrink-0 rounded-lg bg-white px-3 py-1 text-[11px] font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+                        className="shrink-0 rounded-lg bg-white px-3 py-1 text-[11px] font-medium text-ink-2 shadow-sm hover:bg-line-2"
                       >
                         Practice
                       </button>
@@ -183,22 +199,22 @@ export default function ProgressPage() {
 
         {/* Session History */}
         {summaries.length > 0 && (
-          <div className="rounded-xl bg-white p-5 ring-1 ring-gray-100">
-            <h2 className="text-sm font-semibold text-gray-800">Session History</h2>
-            <p className="mb-4 mt-0.5 text-xs text-gray-400">
+          <div className="rounded-xl bg-paper p-5 border border-line">
+            <h2 className="text-sm font-semibold text-ink">Session History</h2>
+            <p className="mb-4 mt-0.5 text-xs text-mute">
               Your recent practice sessions
             </p>
             <div className="space-y-2">
               {[...summaries].reverse().slice(0, 10).map((s, i) => (
-                <div key={i} className="rounded-lg bg-gray-50 px-4 py-3">
+                <div key={i} className="rounded-lg bg-paper-warm px-4 py-3">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-medium text-gray-700">Session {s.sessionNumber}</span>
-                    <span className="text-[10px] text-gray-400">
+                    <span className="text-xs font-medium text-ink-2">Session {s.sessionNumber}</span>
+                    <span className="text-[10px] text-mute">
                       {new Date(s.timestamp).toLocaleDateString()}
                     </span>
                   </div>
-                  <p className="text-xs text-gray-600">{s.summaryText}</p>
-                  <div className="mt-2 flex gap-3 text-[10px] text-gray-400">
+                  <p className="text-xs text-ink-2">{s.summaryText}</p>
+                  <div className="mt-2 flex gap-3 text-[10px] text-mute">
                     <span>{s.turnCount} exchanges</span>
                     <span>{s.errorsThisSession} corrected</span>
                     {s.topStrength && <span className="text-green-600">↑ {s.topStrength}</span>}
@@ -212,9 +228,9 @@ export default function ProgressPage() {
 
         {/* My Mistakes — clean overview of error patterns */}
         {learnerModel && learnerModel.errorPatterns.length > 0 && (
-          <div className="rounded-xl bg-white p-5 ring-1 ring-gray-100">
-            <h2 className="text-sm font-semibold text-gray-800">My Mistakes</h2>
-            <p className="mb-4 mt-0.5 text-xs text-gray-400">
+          <div className="rounded-xl bg-paper p-5 border border-line">
+            <h2 className="text-sm font-semibold text-ink">My Mistakes</h2>
+            <p className="mb-4 mt-0.5 text-xs text-mute">
               Sorted by frequency — practice the ones that trip you up most
             </p>
             <div className="space-y-1">
@@ -239,15 +255,15 @@ export default function ProgressPage() {
 
         {/* Adaptive Learning Path */}
         {learnerModel && learningPath.length > 0 && (
-          <div className="rounded-xl bg-white p-5 ring-1 ring-gray-100">
-            <h2 className="text-sm font-semibold text-gray-800">Your Learning Path</h2>
-            <p className="mb-4 mt-0.5 text-xs text-gray-400">Based on your conversation patterns</p>
+          <div className="rounded-xl bg-paper p-5 border border-line">
+            <h2 className="text-sm font-semibold text-ink">Your Learning Path</h2>
+            <p className="mb-4 mt-0.5 text-xs text-mute">Based on your conversation patterns</p>
 
             <div className="space-y-4">
               {/* Weak — needs practice */}
               {weakItems.length > 0 && (
                 <div>
-                  <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-400">Needs practice</p>
+                  <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-mute">Needs practice</p>
                   <div className="space-y-1">
                     {weakItems.map((item) => (
                       <PathRow key={item.structureId} item={item} onPractice={(id) => router.push(`/chat?lesson=${id}`)} />
@@ -259,7 +275,7 @@ export default function ProgressPage() {
               {/* Developing */}
               {developingItems.length > 0 && (
                 <div>
-                  <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-400">Developing</p>
+                  <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-mute">Developing</p>
                   <div className="space-y-1">
                     {developingItems.map((item) => (
                       <PathRow key={item.structureId} item={item} onPractice={(id) => router.push(`/chat?lesson=${id}`)} />
@@ -271,7 +287,7 @@ export default function ProgressPage() {
               {/* Solid */}
               {solidItems.length > 0 && (
                 <div>
-                  <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-400">Solid</p>
+                  <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-mute">Solid</p>
                   <div className="space-y-1">
                     {solidItems.map((item) => (
                       <PathRow key={item.structureId} item={item} onPractice={(id) => router.push(`/chat?lesson=${id}`)} />
@@ -283,7 +299,7 @@ export default function ProgressPage() {
               {/* New — not yet encountered */}
               {newItems.length > 0 && (
                 <div>
-                  <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-400">Up next</p>
+                  <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-mute">Up next</p>
                   <div className="space-y-1">
                     {newItems.slice(0, 5).map((item) => (
                       <PathRow key={item.structureId} item={item} onPractice={(id) => router.push(`/chat?lesson=${id}`)} />
@@ -297,13 +313,13 @@ export default function ProgressPage() {
 
         {/* No model yet — prompt to start */}
         {!learnerModel && (
-          <div className="rounded-xl border border-dashed border-gray-300 bg-white p-6 text-center">
-            <p className="text-sm text-gray-600">
+          <div className="rounded-xl border border-dashed border-line bg-white p-6 text-center">
+            <p className="text-sm text-ink-2">
               Start a conversation in Quick Practice to build your personalized learning path.
             </p>
             <button
               onClick={() => router.push("/")}
-              className="mt-3 rounded-lg bg-gray-900 px-5 py-2 text-sm font-medium text-white hover:bg-gray-800"
+              className="mt-3 rounded-full bg-ink px-5 py-2 text-sm font-medium text-paper transition-opacity hover:opacity-90"
             >
               Start Practicing
             </button>
@@ -311,9 +327,9 @@ export default function ProgressPage() {
         )}
 
         {/* CEFR Lesson Progress */}
-        <div className="rounded-xl bg-white p-5 ring-1 ring-gray-100">
-          <h2 className="text-sm font-semibold text-gray-800">All Lessons</h2>
-          <p className="mb-4 mt-0.5 text-xs text-gray-400">
+        <div className="rounded-xl bg-paper p-5 border border-line">
+          <h2 className="text-sm font-semibold text-ink">All Lessons</h2>
+          <p className="mb-4 mt-0.5 text-xs text-mute">
             {totalCompleted} of {CURRICULUM.length} completed
           </p>
           <div className="space-y-3">
@@ -325,14 +341,14 @@ export default function ProgressPage() {
                 <div key={lvl}>
                   <div className="mb-1 flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-semibold text-gray-700">{lvl}</span>
-                      <span className="text-xs text-gray-500">{label}</span>
+                      <span className="text-xs font-semibold text-ink-2">{lvl}</span>
+                      <span className="text-xs text-mute">{label}</span>
                     </div>
-                    <span className="text-xs text-gray-400">{completed}/{lessons.length}</span>
+                    <span className="text-xs text-mute">{completed}/{lessons.length}</span>
                   </div>
-                  <div className="h-1.5 w-full rounded-full bg-gray-100">
+                  <div className="h-1.5 w-full rounded-full bg-line-2">
                     <div
-                      className="h-full rounded-full bg-gray-900 transition-all"
+                      className="h-full rounded-full bg-ink transition-all"
                       style={{ width: `${Math.max(pct, 1)}%` }}
                     />
                   </div>
@@ -363,10 +379,10 @@ function MistakeRow({
       ? "bg-red-100 text-red-700"
       : error.correctionLevel === "highlight"
       ? "bg-amber-100 text-amber-700"
-      : "bg-gray-100 text-gray-500";
+      : "bg-line-2 text-mute";
 
   return (
-    <div className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-gray-50">
+    <div className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-line-2">
       {/* Error count badge */}
       <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${levelColor}`}>
         {error.count}
@@ -376,10 +392,10 @@ function MistakeRow({
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-2">
           <span className="text-sm text-red-600 line-through">{error.example}</span>
-          <span className="text-xs text-gray-400">&rarr;</span>
+          <span className="text-xs text-mute">&rarr;</span>
           <span className="text-sm font-medium text-green-700">{error.correction}</span>
         </div>
-        <div className="flex items-center gap-2 text-[10px] text-gray-400">
+        <div className="flex items-center gap-2 text-[10px] text-mute">
           <span>{structure?.name ?? error.structureId}</span>
           {structure && <span>{mastery}% mastery</span>}
         </div>
@@ -389,7 +405,7 @@ function MistakeRow({
       {lessonId && (
         <button
           onClick={() => onPractice(lessonId)}
-          className="shrink-0 rounded-lg border border-gray-200 px-3 py-1 text-[11px] font-medium text-gray-600 hover:bg-gray-100"
+          className="shrink-0 rounded-lg border border-line px-3 py-1 text-[11px] font-medium text-ink-2 hover:bg-line-2"
         >
           Practice
         </button>
@@ -410,13 +426,13 @@ function AIInsights({ model }: { model: LearnerModel }) {
   const topStruggle = [...model.errorPatterns].sort((a, b) => b.count - a.count)[0];
 
   return (
-    <div className="rounded-xl bg-white p-5 ring-1 ring-gray-100">
-      <h2 className="text-sm font-semibold text-gray-800">How the AI Sees Your Learning</h2>
-      <p className="mb-4 mt-0.5 text-xs text-gray-400">
+    <div className="rounded-xl bg-paper p-5 border border-line">
+      <h2 className="text-sm font-semibold text-ink">How the AI Sees Your Learning</h2>
+      <p className="mb-4 mt-0.5 text-xs text-mute">
         The coach adapts in real-time based on your patterns
       </p>
 
-      <div className="space-y-3 text-sm text-gray-600">
+      <div className="space-y-3 text-sm text-ink-2">
         {/* Correction strategy */}
         {escalatedErrors.length > 0 && (
           <div className="rounded-lg bg-red-50 px-4 py-3">
@@ -433,7 +449,7 @@ function AIInsights({ model }: { model: LearnerModel }) {
         {/* Top struggle */}
         {topStruggle && (
           <div className="flex items-start gap-3">
-            <span className="mt-0.5 text-gray-400">&#9679;</span>
+            <span className="mt-0.5 text-mute">&#9679;</span>
             <p>
               <span className="font-medium">Top focus area:</span>{" "}
               {model.structures.find((s) => s.id === topStruggle.structureId)?.name ?? topStruggle.structureId}{" "}
@@ -445,7 +461,7 @@ function AIInsights({ model }: { model: LearnerModel }) {
         {/* SRS status */}
         {srsActive > 0 && (
           <div className="flex items-start gap-3">
-            <span className="mt-0.5 text-gray-400">&#9679;</span>
+            <span className="mt-0.5 text-mute">&#9679;</span>
             <p>
               <span className="font-medium">Spaced repetition:</span>{" "}
               {srsActive} structure{srsActive > 1 ? "s" : ""} in the review queue. The coach times prompts to re-test you at optimal intervals.
@@ -477,7 +493,7 @@ function AIInsights({ model }: { model: LearnerModel }) {
 
         {/* Overall progress */}
         <div className="flex items-start gap-3">
-          <span className="mt-0.5 text-gray-400">&#9679;</span>
+          <span className="mt-0.5 text-mute">&#9679;</span>
           <p>
             <span className="font-medium">Overall:</span>{" "}
             {model.totalTurns} sentences analyzed, {model.structures.length} structures discovered, {totalErrors} total corrections made.
@@ -495,9 +511,9 @@ function MasteryTrendChart({ snapshots }: { snapshots: MasterySnapshot[] }) {
   const maxMastery = Math.max(...trend.map((t) => t.avgMastery), 0.1);
 
   return (
-    <div className="rounded-xl bg-white p-5 ring-1 ring-gray-100">
-      <h2 className="text-sm font-semibold text-gray-800">Progress Over Time</h2>
-      <p className="mb-4 mt-0.5 text-xs text-gray-400">
+    <div className="rounded-xl bg-paper p-5 border border-line">
+      <h2 className="text-sm font-semibold text-ink">Progress Over Time</h2>
+      <p className="mb-4 mt-0.5 text-xs text-mute">
         Average mastery across {trend.length} session{trend.length !== 1 ? "s" : ""}
       </p>
 
@@ -512,11 +528,11 @@ function MasteryTrendChart({ snapshots }: { snapshots: MasterySnapshot[] }) {
               className="flex-1 flex flex-col items-center gap-1"
               title={`Session ${point.session}: ${Math.round(point.avgMastery * 100)}% avg mastery, ${point.mastered} mastered`}
             >
-              <span className="text-[9px] text-gray-400">
+              <span className="text-[9px] text-mute">
                 {Math.round(point.avgMastery * 100)}%
               </span>
               <div
-                className={`w-full rounded-t transition-all ${isLatest ? "bg-gray-900" : "bg-gray-300"}`}
+                className={`w-full rounded-t transition-all ${isLatest ? "bg-ink" : "bg-line"}`}
                 style={{ height: `${height}%` }}
               />
             </div>
@@ -527,7 +543,7 @@ function MasteryTrendChart({ snapshots }: { snapshots: MasterySnapshot[] }) {
       {/* Session labels */}
       <div className="flex gap-1 mt-1">
         {trend.map((point, i) => (
-          <div key={i} className="flex-1 text-center text-[9px] text-gray-400">
+          <div key={i} className="flex-1 text-center text-[9px] text-mute">
             S{point.session}
           </div>
         ))}
@@ -535,23 +551,23 @@ function MasteryTrendChart({ snapshots }: { snapshots: MasterySnapshot[] }) {
 
       {/* Summary stats */}
       <div className="mt-4 grid grid-cols-3 gap-2 text-center">
-        <div className="rounded-lg bg-gray-50 py-2">
-          <p className="text-sm font-bold text-gray-900">
+        <div className="rounded-lg bg-paper-warm py-2">
+          <p className="text-sm font-bold text-ink">
             {trend.length > 0 ? Math.round(trend[trend.length - 1].avgMastery * 100) : 0}%
           </p>
-          <p className="text-[10px] text-gray-400">Current avg</p>
+          <p className="text-[10px] text-mute">Current avg</p>
         </div>
-        <div className="rounded-lg bg-gray-50 py-2">
-          <p className="text-sm font-bold text-gray-900">
+        <div className="rounded-lg bg-paper-warm py-2">
+          <p className="text-sm font-bold text-ink">
             {trend.length > 0 ? trend[trend.length - 1].mastered : 0}
           </p>
-          <p className="text-[10px] text-gray-400">Mastered</p>
+          <p className="text-[10px] text-mute">Mastered</p>
         </div>
-        <div className="rounded-lg bg-gray-50 py-2">
-          <p className="text-sm font-bold text-gray-900">
+        <div className="rounded-lg bg-paper-warm py-2">
+          <p className="text-sm font-bold text-ink">
             {trend.length > 0 ? trend[trend.length - 1].totalErrors : 0}
           </p>
-          <p className="text-[10px] text-gray-400">Total errors</p>
+          <p className="text-[10px] text-mute">Total errors</p>
         </div>
       </div>
     </div>
@@ -563,12 +579,12 @@ function PathRow({ item, onPractice }: { item: PathItem; onPractice: (lessonId: 
   const masteryPct = Math.round(item.mastery * 100);
 
   return (
-    <div className="flex items-center gap-3 rounded-lg px-3 py-2 hover:bg-gray-50">
+    <div className="flex items-center gap-3 rounded-lg px-3 py-2 hover:bg-line-2">
       {/* Mastery bar (tiny) */}
       <div className="w-12">
-        <div className="h-1 w-full rounded-full bg-gray-100">
+        <div className="h-1 w-full rounded-full bg-line-2">
           <div
-            className="h-full rounded-full bg-gray-900 transition-all"
+            className="h-full rounded-full bg-ink transition-all"
             style={{ width: `${Math.max(masteryPct, 2)}%` }}
           />
         </div>
@@ -577,12 +593,12 @@ function PathRow({ item, onPractice }: { item: PathItem; onPractice: (lessonId: 
       {/* Info */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className="truncate text-sm text-gray-700">{item.structureName}</span>
+          <span className="truncate text-sm text-ink-2">{item.structureName}</span>
           {item.improving && (
-            <span className="text-[10px] text-gray-400">&uarr;</span>
+            <span className="text-[10px] text-mute">&uarr;</span>
           )}
         </div>
-        <div className="flex items-center gap-2 text-[10px] text-gray-400">
+        <div className="flex items-center gap-2 text-[10px] text-mute">
           <span>{item.cefrLevel}</span>
           {item.status !== "new" && <span>{masteryPct}%</span>}
           {item.errorCount > 0 && <span>{item.errorCount} errors</span>}
@@ -593,7 +609,7 @@ function PathRow({ item, onPractice }: { item: PathItem; onPractice: (lessonId: 
       {item.lessonId && item.status !== "solid" && (
         <button
           onClick={() => onPractice(item.lessonId!)}
-          className="shrink-0 rounded-lg border border-gray-200 px-3 py-1 text-[11px] font-medium text-gray-600 hover:bg-gray-100"
+          className="shrink-0 rounded-lg border border-line px-3 py-1 text-[11px] font-medium text-ink-2 hover:bg-line-2"
         >
           Practice
         </button>

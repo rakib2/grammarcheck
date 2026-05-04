@@ -11,6 +11,16 @@ interface SkillTreeProps {
   activeLessonId?: string;
 }
 
+/**
+ * Sidebar lesson tree.
+ *
+ * Quiet by design — the sidebar is navigation, so it stays grayscale to keep
+ * the eye on the chat / reference / worksheet surfaces where colored
+ * mastery info actually belongs. Status comes through a small dot indicator
+ * (completed / in-progress / locked / available) and the active lesson's
+ * background.
+ */
+
 export default function SkillTree({ lessons, progress, activeLessonId }: SkillTreeProps) {
   const router = useRouter();
   const [expandedLevels, setExpandedLevels] = useState<Set<CefrLevel>>(new Set<CefrLevel>());
@@ -48,10 +58,8 @@ export default function SkillTree({ lessons, progress, activeLessonId }: SkillTr
   function toggleLevel(level: CefrLevel) {
     setExpandedLevels((prev) => {
       if (prev.has(level)) {
-        // Collapse: close this level
         return new Set<CefrLevel>();
       }
-      // Expand: open only this level, close others
       return new Set<CefrLevel>([level]);
     });
   }
@@ -84,7 +92,7 @@ export default function SkillTree({ lessons, progress, activeLessonId }: SkillTr
 
         return (
           <div key={level}>
-            {/* Level header — clean, minimal */}
+            {/* Level header */}
             <button
               onClick={() => toggleLevel(level)}
               className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-colors hover:bg-gray-50"
@@ -111,7 +119,7 @@ export default function SkillTree({ lessons, progress, activeLessonId }: SkillTr
               </span>
             </button>
 
-            {/* Lessons — minimal list */}
+            {/* Lessons — neutral list with dot status. */}
             {isExpanded && (
               <div className="ml-7 border-l border-gray-100 pl-3 pb-1">
                 {levelLessons.map((lesson) => {
@@ -133,7 +141,6 @@ export default function SkillTree({ lessons, progress, activeLessonId }: SkillTr
                             : "hover:bg-gray-50"
                       }`}
                     >
-                      {/* Minimal status dot */}
                       <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${
                         isCompleted ? "bg-gray-900" :
                         status === "in_progress" ? "bg-gray-400" :

@@ -201,6 +201,21 @@ async function executeAnalyze(
       original: c.original,
       correction: c.correction,
     })),
+    referenceGrammar: output.ruleCard
+      ? {
+          structureId: output.ruleCard.structureId,
+          structureName: output.ruleCard.structureName,
+          rule: output.ruleCard.rule,
+          example: output.ruleCard.example,
+        }
+      : output.activeRule
+        ? {
+            structureId: output.activeRule.structureId,
+            structureName: output.activeRule.structureName,
+            rule: output.activeRule.description,
+            example: null,
+          }
+        : null,
     score: output.score,
     nextPrompt: output.nextPrompt,
     detectedLevel: output.detectedLevel,

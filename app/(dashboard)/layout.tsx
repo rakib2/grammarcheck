@@ -4,6 +4,7 @@ import { Suspense, useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import SkillTree from "@/components/SkillTree";
+import BrandMark from "@/components/BrandMark";
 import { CURRICULUM } from "@/lib/curriculum";
 import { UserLessonProgress } from "@/types";
 import { supabase } from "@/lib/supabase";
@@ -21,6 +22,11 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
   const searchParams = useSearchParams();
   const activeLessonId = searchParams.get("lesson") ?? undefined;
   const [progress, setProgress] = useState<Record<string, UserLessonProgress>>({});
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [pathname]);
 
   useEffect(() => {
     async function loadProgress() {
@@ -65,15 +71,32 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
 
   const completedCount = Object.values(progress).filter((p) => p.status === "completed").length;
   const isOverview = pathname === "/progress";
+  const isReview = pathname === "/review";
+  const isVocabulary = pathname === "/vocabulary";
+  // Active for both the index and any /worksheet/<topic> page.
+  const isWorksheet = pathname.startsWith("/worksheet");
 
   return (
-    <div className="grid h-screen grid-cols-[220px_1fr] bg-gray-50">
-      {/* Sidebar */}
-      <aside className="flex flex-col border-r border-gray-200 bg-white">
+    <div className="flex h-screen bg-gray-50">
+      {/* Mobile backdrop */}
+      {mobileNavOpen && (
+        <div
+          onClick={() => setMobileNavOpen(false)}
+          className="fixed inset-0 z-30 bg-black/30 md:hidden"
+          aria-hidden="true"
+        />
+      )}
+
+      {/* Sidebar — slide-in drawer on mobile, static on md+ */}
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 flex w-[260px] flex-col border-r border-gray-200 bg-white transition-transform duration-200 md:static md:w-[220px] md:translate-x-0 ${
+          mobileNavOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
         <div className="border-b border-gray-100 px-4 py-4">
           <Link href="/" className="flex items-center gap-2">
-            <span className="flex h-6 w-6 items-center justify-center rounded-md bg-gray-900 text-[10px] font-bold text-white">G</span>
-            <span className="text-sm font-semibold text-gray-900">GrammarCoach</span>
+            <BrandMark size={25} />
+            <span className="text-sm font-semibold tracking-[-0.01em] text-gray-900">GrammarFlow</span>
           </Link>
         </div>
 
@@ -88,6 +111,36 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
             Quick Practice
           </Link>
           <Link
+            href="/review"
+            className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs transition-colors ${
+              isReview
+                ? "bg-gray-100 font-medium text-gray-900"
+                : "text-gray-500 hover:bg-gray-50 hover:text-gray-700"
+            }`}
+          >
+            Mistake of the day
+          </Link>
+          <Link
+            href="/worksheet"
+            className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs transition-colors ${
+              isWorksheet
+                ? "bg-gray-100 font-medium text-gray-900"
+                : "text-gray-500 hover:bg-gray-50 hover:text-gray-700"
+            }`}
+          >
+            Worksheets
+          </Link>
+          <Link
+            href="/vocabulary"
+            className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs transition-colors ${
+              isVocabulary
+                ? "bg-gray-100 font-medium text-gray-900"
+                : "text-gray-500 hover:bg-gray-50 hover:text-gray-700"
+            }`}
+          >
+            Vocabulary
+          </Link>
+          <Link
             href="/progress"
             className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs transition-colors ${
               isOverview
@@ -100,16 +153,34 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
         </div>
 
         <div className="flex-1 overflow-y-auto px-3 py-3">
-          <p className="mb-2 px-3 text-[10px] font-medium uppercase tracking-wider text-gray-400">
-            Lessons
-          </p>
+          <div className="mb-2 px-3">
+            <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400">
+              Lessons
+            </p>
+          </div>
           <SkillTree lessons={CURRICULUM} progress={progress} activeLessonId={activeLessonId} />
         </div>
 
         <SidebarFooter completedCount={completedCount} />
       </aside>
 
-      <main className="flex flex-col overflow-hidden">
+      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        {/* Mobile-only hamburger header */}
+        <div className="flex items-center gap-3 border-b border-gray-200 bg-white px-4 py-2.5 md:hidden">
+          <button
+            onClick={() => setMobileNavOpen(true)}
+            aria-label="Open navigation menu"
+            className="rounded-md p-1.5 text-gray-700 hover:bg-gray-100"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 12h18M3 6h18M3 18h18" />
+            </svg>
+          </button>
+          <Link href="/" className="flex items-center gap-2">
+            <BrandMark size={22} />
+            <span className="text-sm font-semibold tracking-[-0.01em] text-gray-900">GrammarFlow</span>
+          </Link>
+        </div>
         {children}
       </main>
     </div>

@@ -134,6 +134,7 @@ export async function POST(request: NextRequest) {
       nativeLanguage,
       coachLanguage,
       level,
+      targetLanguage: learnerModel?.targetLanguage,
     });
 
     const session = await openai.beta.realtime.sessions.create({
@@ -153,9 +154,15 @@ export async function POST(request: NextRequest) {
       },
       turn_detection: {
         type: "semantic_vad",
-        eagerness: "low", // learners need time to think
+        // Low can wait up to ~8s before committing speech; that feels like the
+        // mic is not hearing the learner. Medium keeps the conversation
+        // responsive while still allowing natural pauses.
+        eagerness: "medium",
         interrupt_response: true,
-        create_response: true,
+        // The client commits transcripts and calls our analysis tool directly.
+        // Realtime should not answer learner speech on its own, otherwise it
+        // can skip structured analysis and the UI gets no transcript/corrections.
+        create_response: false,
       },
       input_audio_noise_reduction: { type: "near_field" },
       temperature: 0.8,

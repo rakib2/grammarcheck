@@ -98,6 +98,12 @@ export interface DisplayCorrection {
 }
 
 export interface RuleCardData {
+  /**
+   * Stable id of the underlying GrammarStructure. Lets the chat UI look up
+   * the static reference (whyThisHappens + grammarTable) and render an
+   * inline table next to the recast.
+   */
+  structureId: string;
   structureName: string;
   rule: string;
   l1Comparison: string | null;
@@ -178,6 +184,7 @@ export function processUserTurn(input: EngineInput): EngineOutput {
         const structDef = getStructureById(error.structureId);
         const l1Key = learnerModel.nativeLanguage;
         ruleCard = {
+          structureId: error.structureId,
           structureName: structDef?.name ?? error.structureId,
           rule: error.rule,
           l1Comparison: structDef?.l1Interference[l1Key] ?? null,
@@ -577,11 +584,15 @@ function getTargetStructure(
 // Initialize a new learner model
 // ───────────────────────────────────────────────────────────────
 
-export function createLearnerModel(nativeLanguage: string): LearnerModel {
+export function createLearnerModel(
+  nativeLanguage: string,
+  targetLanguage: string = "de"
+): LearnerModel {
   return {
     id: `learner_${Date.now()}`,
     nativeLanguage,
     coachLanguage: nativeLanguage,    // default: respond in the user's native language
+    targetLanguage,
     detectedLevel: "A1",
     structures: [],
     errorPatterns: [],

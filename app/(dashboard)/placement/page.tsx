@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { CefrLevel } from "@/types";
+import BrandMark from "@/components/BrandMark";
 
 interface PlacementPrompt {
   index: number;
@@ -10,9 +11,13 @@ interface PlacementPrompt {
   prompt: string;
 }
 
-const LEVEL_COLORS: Record<CefrLevel, string> = {
-  A1: "bg-green-500", A2: "bg-emerald-500", B1: "bg-blue-500",
-  B2: "bg-indigo-500", C1: "bg-purple-500", C2: "bg-rose-500",
+const LEVEL_LABELS: Record<CefrLevel, string> = {
+  A1: "Beginner",
+  A2: "Elementary",
+  B1: "Intermediate",
+  B2: "Upper Intermediate",
+  C1: "Advanced",
+  C2: "Mastery",
 };
 
 export default function PlacementPage() {
@@ -86,8 +91,8 @@ export default function PlacementPage() {
 
   if (loading) {
     return (
-      <div className="flex flex-1 items-center justify-center">
-        <p className="text-sm text-gray-400">Loading placement test...</p>
+      <div className="flex flex-1 items-center justify-center bg-bg">
+        <p className="text-sm text-mute">Loading placement test…</p>
       </div>
     );
   }
@@ -95,26 +100,35 @@ export default function PlacementPage() {
   // Phase 1: Ask native language
   if (phase === "language") {
     return (
-      <div className="flex flex-1 items-center justify-center p-6">
+      <div className="flex flex-1 items-center justify-center bg-bg p-6">
         <div className="w-full max-w-md space-y-6 text-center">
-          <div className="text-4xl">👋</div>
-          <h1 className="text-2xl font-bold text-gray-900">Welcome to GrammarCoach</h1>
-          <p className="text-sm text-gray-500">
-            Before we start, let&apos;s find out your current German level.
-            First, what&apos;s your native language?
-          </p>
-          <div className="flex gap-3">
+          <div className="flex justify-center">
+            <BrandMark size={36} />
+          </div>
+          <div>
+            <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-mute">
+              Welcome
+            </p>
+            <h1 className="mt-2 font-serif text-3xl font-medium tracking-[-0.015em] text-ink">
+              Let&apos;s find your level.
+            </h1>
+            <p className="mt-3 text-sm text-ink-2">
+              Before we start, what&apos;s your native language? It helps the coach explain
+              things in a way that fits how you already think.
+            </p>
+          </div>
+          <div className="flex gap-2">
             <input
               value={nativeLanguage}
               onChange={(e) => setNativeLanguage(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="e.g. English, Turkish, Bengali..."
-              className="flex-1 rounded-xl border border-gray-300 px-4 py-3 text-sm outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+              placeholder="e.g. English, Turkish, Bengali"
+              className="flex-1 rounded-xl border border-line bg-paper px-4 py-3 text-sm outline-none transition-colors focus:border-ink"
             />
             <button
               onClick={handleLanguageSubmit}
               disabled={!nativeLanguage.trim()}
-              className="rounded-xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+              className="rounded-xl bg-ink px-5 py-3 text-sm font-medium text-paper transition-opacity hover:opacity-90 disabled:opacity-40"
             >
               Start
             </button>
@@ -127,24 +141,39 @@ export default function PlacementPage() {
   // Phase 3: Show result
   if (phase === "result" && result) {
     return (
-      <div className="flex flex-1 items-center justify-center p-6">
+      <div className="flex flex-1 items-center justify-center bg-bg p-6">
         <div className="w-full max-w-md space-y-6 text-center">
-          <div className="text-5xl">🎯</div>
-          <h1 className="text-2xl font-bold text-gray-900">Your Level</h1>
-          <div className={`mx-auto flex h-20 w-20 items-center justify-center rounded-2xl text-2xl font-bold text-white ${LEVEL_COLORS[result.assignedLevel]}`}>
-            {result.assignedLevel}
+          <div className="flex justify-center">
+            <BrandMark size={36} />
           </div>
-          <p className="text-sm text-gray-500">
-            Based on your answers (score: {result.totalScore}%), we recommend
-            starting at <span className="font-semibold">{result.assignedLevel}</span>.
-            Your learning path has been personalized!
+          <div>
+            <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-mute">
+              Your level
+            </p>
+            <h1 className="mt-2 font-serif text-5xl font-medium tracking-[-0.02em] text-ink">
+              {result.assignedLevel}
+            </h1>
+            <p className="mt-1 text-sm text-mute">{LEVEL_LABELS[result.assignedLevel]}</p>
+          </div>
+          <p className="text-sm leading-relaxed text-ink-2">
+            Based on your answers (score: {result.totalScore}%), we&apos;ll start you at{" "}
+            <b className="text-ink">{result.assignedLevel}</b>. The coach will adapt as
+            you go — nothing is locked.
           </p>
-          <button
-            onClick={() => router.push("/progress")}
-            className="rounded-xl bg-indigo-600 px-8 py-3 text-sm font-semibold text-white hover:bg-indigo-700"
-          >
-            View My Learning Plan
-          </button>
+          <div className="flex flex-wrap justify-center gap-2">
+            <button
+              onClick={() => router.push("/")}
+              className="rounded-full bg-ink px-5 py-2.5 text-sm font-medium text-paper transition-opacity hover:opacity-90"
+            >
+              Start a session
+            </button>
+            <button
+              onClick={() => router.push("/progress")}
+              className="rounded-full border border-line bg-paper px-5 py-2.5 text-sm font-medium text-ink-2 transition-colors hover:bg-line-2"
+            >
+              See the grammar map
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -155,17 +184,17 @@ export default function PlacementPage() {
   const progressPct = Math.round((currentIdx / prompts.length) * 100);
 
   return (
-    <div className="flex flex-1 flex-col">
+    <div className="flex flex-1 flex-col bg-bg">
       {/* Progress bar */}
-      <div className="border-b border-gray-200 bg-white px-6 py-4">
+      <div className="border-b border-line bg-paper px-6 py-4">
         <div className="mx-auto max-w-lg">
-          <div className="mb-2 flex items-center justify-between text-xs text-gray-500">
-            <span>Placement Test</span>
+          <div className="mb-2 flex items-center justify-between text-xs text-mute">
+            <span className="font-mono uppercase tracking-[0.12em]">Placement test</span>
             <span>{currentIdx + 1} / {prompts.length}</span>
           </div>
-          <div className="h-2 w-full rounded-full bg-gray-100">
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-line-2">
             <div
-              className="h-full rounded-full bg-indigo-500 transition-all"
+              className="h-full rounded-full bg-ink transition-all"
               style={{ width: `${progressPct}%` }}
             />
           </div>
@@ -176,34 +205,36 @@ export default function PlacementPage() {
       <div className="flex flex-1 items-center justify-center p-6">
         <div className="w-full max-w-lg space-y-6">
           <div className="flex items-center gap-2">
-            <span className={`rounded px-2 py-0.5 text-xs font-bold text-white ${LEVEL_COLORS[currentPrompt.level]}`}>
-              {currentPrompt.level}
+            <span className="rounded-full bg-chip-bg px-2.5 py-0.5 text-[11px] font-medium text-ink-2">
+              {currentPrompt.level} · {LEVEL_LABELS[currentPrompt.level]}
             </span>
-            <span className="text-xs text-gray-400">Question {currentIdx + 1}</span>
+            <span className="text-xs text-mute">Question {currentIdx + 1}</span>
           </div>
 
-          <div className="rounded-xl bg-white p-6 shadow-sm ring-1 ring-gray-100">
-            <p className="text-base font-medium text-gray-800">{currentPrompt.prompt}</p>
+          <div className="rounded-xl border border-line bg-paper-warm p-6">
+            <p className="font-serif text-2xl font-medium leading-snug tracking-[-0.01em] text-ink">
+              {currentPrompt.prompt}
+            </p>
           </div>
 
           {submitting ? (
-            <div className="text-center text-sm text-gray-400">
-              Evaluating your answers...
+            <div className="text-center text-sm text-mute">
+              Evaluating your answers…
             </div>
           ) : (
-            <div className="flex gap-3">
+            <div className="flex gap-2">
               <input
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Type your answer..."
+                placeholder="Type your answer…"
                 autoFocus
-                className="flex-1 rounded-xl border border-gray-300 px-4 py-3 text-sm outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                className="flex-1 rounded-xl border border-line bg-paper px-4 py-3 text-sm outline-none transition-colors focus:border-ink"
               />
               <button
                 onClick={handleAnswer}
                 disabled={!input.trim()}
-                className="rounded-xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+                className="rounded-xl bg-ink px-5 py-3 text-sm font-medium text-paper transition-opacity hover:opacity-90 disabled:opacity-40"
               >
                 {currentIdx + 1 < prompts.length ? "Next" : "Finish"}
               </button>

@@ -4,7 +4,27 @@ export type CefrLevel = "A1" | "A2" | "B1" | "B2" | "C1" | "C2";
 
 export type LessonStatus = "locked" | "available" | "in_progress" | "completed";
 
-export type LessonPhase = "teach" | "drill" | "write" | "review";
+/**
+ * Phases a curriculum lesson cycles through.
+ *
+ *  teach     — markdown content + reference card (already has it)
+ *  drill     — fill-in-the-blank prompts (already has it)
+ *  translate — translate English → German with progressively-fading hints
+ *  story     — scenario-based production requiring the target structure
+ *  write     — open-ended sentence writing (already has it)
+ *  error_spot — find/fix a sentence containing the learner's actual past
+ *               mistake against this structure. Conditionally inserted only
+ *               when learnerModel.errorPatterns has a match for the lesson.
+ *  review    — final summary + score (already has it)
+ */
+export type LessonPhase =
+  | "teach"
+  | "drill"
+  | "translate"
+  | "story"
+  | "write"
+  | "error_spot"
+  | "review";
 
 export interface CurriculumLesson {
   id: string;
@@ -62,6 +82,22 @@ export interface GrammarAnalysis {
   score: number;
   errorTypes: string[];
   coachMessage: string;
+}
+
+export interface TranslationIssue {
+  original: string;
+  correction: string;
+  explanation: string;
+  severity: "minor" | "major";
+}
+
+export interface TranslationEvalResult {
+  score: number;
+  correct: boolean;
+  feedback: string;
+  correctAnswer: string;
+  issues: TranslationIssue[];
+  nextStep: string;
 }
 
 export interface AnalyzeGrammarRequest {
@@ -137,6 +173,12 @@ export interface LearnerModel {
   id: string;
   nativeLanguage: string;
   coachLanguage: string;            // language the coach responds in (e.g. "English", "Bengali", "German")
+  /**
+   * Language the learner is studying. ISO 639-1 code (e.g. "de", "es", "fr").
+   * Loads the matching curriculum, structure list, and tutor prompt template
+   * from lib/languages. Defaults to "de" for legacy learner models.
+   */
+  targetLanguage: string;
   detectedLevel: CefrLevel;
   structures: GrammarStructure[];
   errorPatterns: ErrorPattern[];
@@ -177,4 +219,118 @@ export interface ConversationState {
   /** When the learner makes an error, we drill the same grammar topic for a few turns */
   focusStructure: string | null;    // structure ID to keep drilling
   focusRemaining: number;           // turns left before moving on (0 = no focus)
+}
+
+// ── Vocabulary ──
+
+export type VocabularyPos =
+  | "noun"
+  | "verb"
+  | "adjective"
+  | "adverb"
+  | "preposition"
+  | "particle"
+  | "phrase";
+
+/**
+ * One entry in the learner's personal vocabulary deck.
+ *
+ * Stored locally (lib/vocabulary.ts) and reviewed via spaced repetition.
+ * `dueAt` drives daily-deck eligibility; `interval` and `easeFactor` follow
+ * an SM-2-style schedule.
+ */
+export interface VocabularyItem {
+  id: string;
+  /** Dictionary form, e.g. "essen", "Apfel" */
+  lemma: string;
+  /** Surface form when different from lemma; useful for irregulars */
+  inflection?: string;
+  partOfSpeech: VocabularyPos;
+  /** Article for nouns: "der" | "die" | "das" */
+  gender?: "der" | "die" | "das";
+  /** Plural form for nouns when applicable */
+  plural?: string;
+  cefrLevel: CefrLevel;
+  /** Optional link back to a grammar structure this word reinforces */
+  structureId?: string;
+  /** A natural example sentence using the lemma at the learner's level */
+  exampleSentence: string;
+  /** Translation in the learner's native language */
+  l1Translation: string;
+
+  // ── SRS state ──
+  /** ISO date when added to deck */
+  introduced: string;
+  /** ISO date of the last grading, or null if never reviewed */
+  lastReviewed: string | null;
+  /** ISO date when the card is next eligible for review */
+  dueAt: string;
+  /** Current interval in days (0 = today, 1 = tomorrow, etc.) */
+  interval: number;
+  /** SM-2 ease factor (1.3..2.5+) — bigger means easier */
+  easeFactor: number;
+  /** Successful review count in a row (resets on lapse) */
+  repetitions: number;
+  /** Total times the learner forgot the word */
+  lapses: number;
+}
+
+/**
+ * Grading scale for vocabulary review. Borrowed from Anki / SM-2.
+ * Maps to ease-factor and interval adjustments in lib/vocabulary.gradeVocabulary.
+ */
+export type VocabularyGrade = "again" | "hard" | "good" | "easy";
+
+// ── Exercise pool ──
+
+/** What shape of exercise we're pooling. Lifecycle is identical across kinds. */
+export type PooledExerciseKind =
+  | "drill"
+  | "translate"
+  | "error_spot"
+  | "story"
+  | "worksheet";
+
+/**
+ * How a pooled exercise gets graded at submit time.
+ *   exact_match     — normalized string equality vs eval_spec.answer
+ *   set_membership  — answer ∈ eval_spec.acceptable[]
+ *   regex           — eval_spec.pattern matches (case-insensitive)
+ *   llm             — falls through to /api/lesson/eval
+ */
+export type PooledExerciseEvalKind =
+  | "exact_match"
+  | "set_membership"
+  | "regex"
+  | "llm";
+
+export type PooledExerciseStatus =
+  | "pending"
+  | "served"
+  | "submitted"
+  | "retired";
+
+/**
+ * One pre-generated exercise sitting in a learner's queue. Shape mirrors
+ * `exercise_pool` table (supabase/schema-exercise-pool.sql).
+ *
+ * `payload` and `evalSpec` shapes depend on `kind` — destructuring lives in
+ * the consumer (chat page, study page) and the eval dispatcher in
+ * lib/exercisePool.ts.
+ */
+export interface PooledExercise {
+  id: string;
+  language: string;
+  topicId: string;
+  kind: PooledExerciseKind;
+  payload: Record<string, unknown>;
+  payloadHash: string;
+  evalKind: PooledExerciseEvalKind;
+  evalSpec: Record<string, unknown>;
+  status: PooledExerciseStatus;
+  batchId: string;
+  generatedAt: string;
+  servedAt: string | null;
+  submittedAt: string | null;
+  score: number | null;
 }

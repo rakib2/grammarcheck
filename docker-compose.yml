@@ -7,4 +7,8 @@ services:
       - .env.local
     volumes:
       - .:/app
+      # Anonymous volumes so host artifacts don't bleed into the Linux container.
+      # Without these, a `next build` or `npm install` run on macOS overlays the
+      # container's installs/build cache and `next dev` hangs at "Starting…".
       - /app/node_modules
+      - /app/.next

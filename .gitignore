@@ -22,3 +22,7 @@ npm-debug.log*
 *.tsbuildinfo
 next-env.d.ts
 .gstack/
+
+# Claude Code local config (project hooks + per-user permissions).
+# Don't ship Claude state with the app build.
+.claude/

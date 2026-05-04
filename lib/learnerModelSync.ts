@@ -1,5 +1,6 @@
 import { LearnerModel, GrammarStructure, ErrorPattern, SpacedRepetitionItem, CefrLevel } from "@/types";
 import { supabase } from "./supabase";
+import { DEFAULT_LANGUAGE_ID } from "./languages";
 
 const STORAGE_KEY = "grammarcoach_learner_model";
 
@@ -9,7 +10,11 @@ function readLocal(): LearnerModel | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as LearnerModel;
+    // Backfill targetLanguage for legacy localStorage data
+    if (!parsed.targetLanguage) parsed.targetLanguage = DEFAULT_LANGUAGE_ID;
+    return parsed;
   } catch {
     return null;
   }
@@ -30,6 +35,13 @@ interface LearnerRow {
   id: string;
   native_language: string;
   coach_language: string | null;
+  /**
+   * Optional. The Supabase schema does not yet have a `target_language`
+   * column — when multi-language UI ships, add the column and the read path
+   * will pick it up automatically. Until then we default to the registry
+   * default in {@link rowsToModel}.
+   */
+  target_language?: string | null;
   detected_level: CefrLevel;
   session_count: number;
   total_turns: number;
@@ -107,6 +119,7 @@ function rowsToModel(
     id: learner.id,
     nativeLanguage: learner.native_language,
     coachLanguage: learner.coach_language ?? learner.native_language,
+    targetLanguage: learner.target_language ?? DEFAULT_LANGUAGE_ID,
     detectedLevel: learner.detected_level,
     structures: grammarStructures,
     errorPatterns,

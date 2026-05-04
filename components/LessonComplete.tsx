@@ -10,6 +10,19 @@ interface LessonCompleteProps {
   writeScore: number;
   passed: boolean;
   nextLesson?: CurriculumLesson;
+  onRetry?: () => void;
+  /**
+   * Optional brain-picked alternative path. When the learner is weak on a
+   * structure that isn't part of the immediate-next lesson, surface it here
+   * so the regular curriculum march doesn't bury the more useful detour.
+   */
+  focusedAlternative?: {
+    lessonId: string;
+    title: string;
+    structureName: string;
+    mastery: number;
+    reason: string;
+  } | null;
 }
 
 export default function LessonComplete({
@@ -18,6 +31,8 @@ export default function LessonComplete({
   writeScore,
   passed,
   nextLesson,
+  onRetry,
+  focusedAlternative,
 }: LessonCompleteProps) {
   const router = useRouter();
   const avgScore = Math.round((drillScore + writeScore) / 2);
@@ -67,14 +82,35 @@ export default function LessonComplete({
           >
             Next: {nextLesson.title}
           </button>
-        ) : !passed ? (
-          <button
-            onClick={() => router.push(`/chat?lesson=${lesson.id}&retry=1`)}
-            className="rounded-xl bg-gray-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-gray-800"
-          >
-            Try Again
-          </button>
         ) : null}
+        {focusedAlternative && (
+          <button
+            onClick={() => router.push(`/chat?lesson=${focusedAlternative.lessonId}`)}
+            className="rounded-xl border border-gray-200 bg-white px-5 py-2.5 text-left text-sm hover:bg-gray-50"
+          >
+            <p className="font-medium text-gray-900">
+              Or focus on: {focusedAlternative.title}
+            </p>
+            <p className="mt-0.5 text-[11px] text-gray-500">
+              {focusedAlternative.structureName} ·{" "}
+              {Math.round(focusedAlternative.mastery * 100)}% mastery ·{" "}
+              {focusedAlternative.reason}
+            </p>
+          </button>
+        )}
+        <button
+          onClick={() => {
+            if (onRetry) onRetry();
+            else router.push(`/chat?lesson=${lesson.id}&attempt=${Date.now()}`);
+          }}
+          className={`rounded-xl px-5 py-2.5 text-sm font-semibold ${
+            passed && nextLesson
+              ? "bg-gray-50 text-gray-700 hover:bg-gray-100"
+              : "bg-gray-900 text-white hover:bg-gray-800"
+          }`}
+        >
+          Try Again
+        </button>
         <button
           onClick={() => router.push("/progress")}
           className="rounded-xl bg-gray-50 px-5 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-100"

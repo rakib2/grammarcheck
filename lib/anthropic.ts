@@ -14,7 +14,50 @@ function safeParseJSON<T>(text: string): T {
   if (cleaned.startsWith("```")) {
     cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
   }
-  return JSON.parse(cleaned);
+  try {
+    return JSON.parse(cleaned);
+  } catch (err) {
+    const extracted = extractFirstJSONObject(cleaned);
+    if (extracted) return JSON.parse(extracted);
+    throw err;
+  }
+}
+
+function extractFirstJSONObject(text: string): string | null {
+  const start = text.indexOf("{");
+  if (start === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < text.length; i++) {
+    const char = text[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = true;
+    } else if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(start, i + 1);
+      }
+    }
+  }
+
+  return null;
 }
 
 export interface AnalysisWithLevel extends GrammarAnalysis {
@@ -409,7 +452,7 @@ export async function analyzeForConversation(
 
   const message = await anthropic.messages.create({
     model,
-    max_tokens: 1500,
+    max_tokens: opts.preferFast ? 3000 : 2200,
     system: systemPrompt,
     messages,
   });

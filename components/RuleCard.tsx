@@ -12,9 +12,18 @@ export default function RuleCard({ token, index }: RuleCardProps) {
 
   return (
     <div
-      className="rule-card-enter rounded-xl border border-gray-200 bg-white p-4"
+      className="rule-card-enter rounded-xl border border-line bg-paper-warm p-4"
       style={{ animationDelay: `${delay}ms` }}
     >
+      <div className="mb-3 flex items-center justify-between">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-400">
+          Rule card
+        </p>
+        <span className="rounded-full bg-white px-2 py-0.5 text-[10px] text-gray-400 ring-1 ring-line-2">
+          inline
+        </span>
+      </div>
+
       {/* Correction row */}
       {token.correction && (
         <div className="mb-3 flex items-center gap-3">
