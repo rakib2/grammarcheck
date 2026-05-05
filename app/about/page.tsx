@@ -13,7 +13,7 @@ import MarketingFooter from "@/components/marketing/MarketingFooter";
 export const metadata: Metadata = {
   title: "About — GrammarFlow",
   description:
-    "GrammarFlow is a voice-first German grammar coach built in Düsseldorf. Catches the structures you keep getting wrong, walks you through them, tracks what you've actually mastered.",
+    "GrammarFlow is a voice-first German grammar coach. Catches the structures you keep getting wrong, walks you through them, tracks what you've actually mastered.",
 };
 
 export default function AboutPage() {
@@ -23,10 +23,8 @@ export default function AboutPage() {
       <Hero />
       <WhatThisIs />
       <WhatItDoes />
-      <WhoBuildsIt />
-      <DataAndPrivacy />
       <Contact />
-      <MarketingFooter />
+      <MarketingFooter showTagline={false} />
     </main>
   );
 }
@@ -133,71 +131,6 @@ function WhatItDoes() {
               </p>
             </div>
           ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-// ── Who builds it ───────────────────────────────────────────────
-
-function WhoBuildsIt() {
-  return (
-    <section className="border-b border-line bg-paper-warm">
-      <div className="mx-auto max-w-3xl px-6 py-16 md:py-20">
-        <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-mute">
-          Who builds it
-        </p>
-        <h2 className="mt-3 font-serif text-[28px] font-medium leading-[1.15] tracking-[-0.02em] text-ink md:text-[36px]">
-          An independent project, made in Düsseldorf.
-        </h2>
-        <div className="mt-6 space-y-4 text-[16px] leading-relaxed text-ink-2">
-          <p>
-            GrammarFlow is a small, independent project based in Düsseldorf,
-            Germany. It&apos;s currently in private beta. We&apos;re starting
-            with German because its grammar is precise enough to teach this way
-            — cases, articles, word order, separable verbs. Other languages
-            later, only when we&apos;re sure we won&apos;t water down what
-            works.
-          </p>
-          <p>
-            No VC pressure, no growth-at-all-costs, no notification spam. Just
-            a tool we&apos;d want to use ourselves.
-          </p>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-// ── Data & privacy ──────────────────────────────────────────────
-
-function DataAndPrivacy() {
-  return (
-    <section className="border-b border-line bg-bg">
-      <div className="mx-auto max-w-3xl px-6 py-16 md:py-20">
-        <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-mute">
-          How your data is handled
-        </p>
-        <h2 className="mt-3 font-serif text-[28px] font-medium leading-[1.15] tracking-[-0.02em] text-ink md:text-[36px]">
-          Boring. Which is the point.
-        </h2>
-        <div className="mt-6 space-y-4 text-[16px] leading-relaxed text-ink-2">
-          <p>
-            Your practice sessions and progress are stored in Supabase
-            (PostgreSQL). Grammar feedback is generated using the Anthropic
-            Claude and OpenAI APIs — your sentences are sent to those models to
-            produce corrections, and not used for training.
-          </p>
-          <p>
-            We don&apos;t sell your data, run third-party ads, or share it with
-            anyone outside the processors above. You can delete your account
-            and associated data at any time by emailing us.
-          </p>
-          <p>
-            A full privacy policy and imprint will live alongside this page as
-            we exit beta.
-          </p>
         </div>
       </div>
     </section>
