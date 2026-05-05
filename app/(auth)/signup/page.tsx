@@ -9,7 +9,6 @@ export default function SignupPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [inviteCode, setInviteCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -29,26 +28,6 @@ export default function SignupPage() {
     }
 
     setLoading(true);
-
-    // Validate invite code server-side first. If gating is disabled server-side
-    // (SIGNUP_INVITE_CODE unset), the route returns ok=true regardless.
-    try {
-      const res = await fetch("/api/auth/check-invite", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: inviteCode }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        setError(body.reason ?? "Invite code required");
-        setLoading(false);
-        return;
-      }
-    } catch {
-      setError("Could not verify invite code. Try again.");
-      setLoading(false);
-      return;
-    }
 
     const { error: err } = await signUp(email, password);
     if (err) {
@@ -142,21 +121,6 @@ export default function SignupPage() {
               onChange={(e) => setConfirmPassword(e.target.value)}
               className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-500"
               placeholder="••••••••"
-            />
-          </div>
-
-          <div>
-            <label htmlFor="invite" className="block text-xs font-medium text-gray-700">
-              Invite code
-            </label>
-            <input
-              id="invite"
-              type="text"
-              value={inviteCode}
-              onChange={(e) => setInviteCode(e.target.value)}
-              autoComplete="off"
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-500"
-              placeholder="Enter code shared with you"
             />
           </div>
 
