@@ -85,7 +85,7 @@ export default function ReviewPage() {
           Once you make a few mistakes in conversation, the most frequent one will surface here.
         </p>
         <button
-          onClick={() => router.push("/")}
+          onClick={() => router.push("/practice")}
           className="mt-2 rounded-full bg-ink px-5 py-2 text-sm font-medium text-paper transition-opacity hover:opacity-90"
         >
           Start a session
@@ -112,7 +112,7 @@ export default function ReviewPage() {
           </span>
         </div>
         <button
-          onClick={() => router.push("/")}
+          onClick={() => router.push("/practice")}
           className="rounded-lg px-3 py-1.5 text-xs text-mute transition-colors hover:bg-line-2"
         >
           Back to chat
@@ -157,7 +157,7 @@ export default function ReviewPage() {
                 Drill 30 seconds
               </button>
               <button
-                onClick={() => router.push("/")}
+                onClick={() => router.push("/practice")}
                 className="rounded-full border border-line px-4 py-2 text-xs font-medium text-ink-2 transition-colors hover:bg-line-2"
               >
                 Skip · already got it

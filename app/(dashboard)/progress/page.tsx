@@ -117,7 +117,7 @@ export default function ProgressPage() {
             </h1>
           </div>
           <button
-            onClick={() => router.push("/")}
+            onClick={() => router.push("/practice")}
             className="rounded-full bg-ink px-4 py-2 text-sm font-medium text-paper transition-opacity hover:opacity-90"
           >
             Quick Practice
@@ -318,7 +318,7 @@ export default function ProgressPage() {
               Start a conversation in Quick Practice to build your personalized learning path.
             </p>
             <button
-              onClick={() => router.push("/")}
+              onClick={() => router.push("/practice")}
               className="mt-3 rounded-full bg-ink px-5 py-2 text-sm font-medium text-paper transition-opacity hover:opacity-90"
             >
               Start Practicing

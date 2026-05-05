@@ -1,14 +1,13 @@
-import Link from "next/link";
 import type { Metadata } from "next";
-import BrandMark from "@/components/BrandMark";
 import ContactForm from "@/components/ContactForm";
+import MarketingHeader from "@/components/marketing/MarketingHeader";
+import MarketingFooter from "@/components/marketing/MarketingFooter";
 
 /**
- * Public about page. Companion to /landing.
- *
- * Tone matches the marketing landing — minimal, anti-gamification,
- * voice-first. Used for human readers and as a categorization signal
- * for corporate web filters that gate uncategorized domains.
+ * Public about page. Tone matches the marketing landing — minimal,
+ * anti-gamification, voice-first. Used for human readers and as a
+ * categorization signal for corporate web filters that gate
+ * uncategorized domains.
  */
 
 export const metadata: Metadata = {
@@ -20,60 +19,15 @@ export const metadata: Metadata = {
 export default function AboutPage() {
   return (
     <main className="bg-bg text-ink">
-      <Header />
+      <MarketingHeader activePath="/about" />
       <Hero />
       <WhatThisIs />
       <WhatItDoes />
       <WhoBuildsIt />
       <DataAndPrivacy />
       <Contact />
-      <Footer />
+      <MarketingFooter />
     </main>
-  );
-}
-
-// ── Header ──────────────────────────────────────────────────────
-
-function Header() {
-  return (
-    <header className="sticky top-0 z-30 border-b border-line/60 bg-bg/85 backdrop-blur">
-      <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3.5">
-        <Link href="/landing" className="flex items-center gap-2">
-          <BrandMark size={24} />
-          <span className="font-serif text-lg font-medium tracking-[-0.01em] text-ink">
-            GrammarFlow
-          </span>
-          <span className="ml-2 hidden rounded-full border border-line bg-paper-warm px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-mute md:inline-block">
-            Private beta · German
-          </span>
-        </Link>
-        <nav className="hidden items-center gap-6 text-[13px] text-ink-2 md:flex">
-          <Link href="/landing#how" className="transition-colors hover:text-ink">
-            How it works
-          </Link>
-          <Link href="/landing#why" className="transition-colors hover:text-ink">
-            Why a tutor
-          </Link>
-          <Link href="/about" className="text-ink transition-colors">
-            About
-          </Link>
-        </nav>
-        <div className="flex items-center gap-2">
-          <Link
-            href="/login"
-            className="rounded-full px-3 py-1.5 text-[13px] text-ink-2 transition-colors hover:bg-line-2 hover:text-ink"
-          >
-            Log in
-          </Link>
-          <Link
-            href="/signup"
-            className="rounded-full bg-ink px-4 py-1.5 text-[13px] font-medium text-paper transition-opacity hover:opacity-90"
-          >
-            Start free
-          </Link>
-        </div>
-      </div>
-    </header>
   );
 }
 
@@ -273,85 +227,5 @@ function Contact() {
         </div>
       </div>
     </section>
-  );
-}
-
-// ── Footer ──────────────────────────────────────────────────────
-
-function Footer() {
-  return (
-    <footer className="border-t border-line bg-bg">
-      <div className="mx-auto grid max-w-6xl gap-10 px-6 py-12 md:grid-cols-[1.5fr_1fr_1fr_1fr]">
-        <div>
-          <Link href="/landing" className="flex items-center gap-2">
-            <BrandMark size={20} />
-            <span className="font-serif text-base font-medium tracking-[-0.01em] text-ink">
-              GrammarFlow
-            </span>
-          </Link>
-          <p className="mt-3 max-w-xs text-[13px] leading-relaxed text-ink-2">
-            A tutor for your German grammar. Voice-first, mistake-aware, calm.
-          </p>
-        </div>
-        <FooterColumn
-          heading="Product"
-          links={[
-            { href: "/landing#how", label: "How it works" },
-            { href: "/landing#why", label: "Why a tutor" },
-            { href: "/landing#languages", label: "Languages" },
-            { href: "/about", label: "About" },
-          ]}
-        />
-        <FooterColumn
-          heading="Account"
-          links={[
-            { href: "/signup", label: "Start free" },
-            { href: "/login", label: "Log in" },
-          ]}
-        />
-        <FooterColumn
-          heading="Legal"
-          links={[
-            { href: "#", label: "Privacy" },
-            { href: "#", label: "Terms" },
-            { href: "#", label: "Imprint" },
-          ]}
-        />
-      </div>
-      <div className="border-t border-line">
-        <div className="mx-auto flex max-w-6xl flex-col items-start justify-between gap-2 px-6 py-5 text-[12px] text-mute md:flex-row md:items-center">
-          <p>© 2026 GrammarFlow · grammarflow.io</p>
-          <p>Made with care · Düsseldorf</p>
-        </div>
-      </div>
-    </footer>
-  );
-}
-
-function FooterColumn({
-  heading,
-  links,
-}: {
-  heading: string;
-  links: { href: string; label: string }[];
-}) {
-  return (
-    <div>
-      <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-mute">
-        {heading}
-      </p>
-      <ul className="mt-3 space-y-1.5">
-        {links.map((l) => (
-          <li key={l.label}>
-            <Link
-              href={l.href}
-              className="text-[13px] text-ink-2 transition-colors hover:text-ink"
-            >
-              {l.label}
-            </Link>
-          </li>
-        ))}
-      </ul>
-    </div>
   );
 }

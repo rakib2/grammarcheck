@@ -106,7 +106,7 @@ export default function SessionRecapPage() {
           Finish a conversation and a one-screen recap will land here.
         </p>
         <button
-          onClick={() => router.push("/")}
+          onClick={() => router.push("/practice")}
           className="mt-2 rounded-full bg-ink px-5 py-2 text-sm font-medium text-paper transition-opacity hover:opacity-90"
         >
           Start a session
@@ -128,7 +128,7 @@ export default function SessionRecapPage() {
           </span>
         </div>
         <button
-          onClick={() => router.push("/")}
+          onClick={() => router.push("/practice")}
           className="rounded-lg px-3 py-1.5 text-xs text-mute transition-colors hover:bg-line-2"
         >
           Back to chat
@@ -209,7 +209,7 @@ export default function SessionRecapPage() {
         {/* One button */}
         <div className="mt-8 flex flex-wrap items-center gap-3">
           <button
-            onClick={() => router.push("/")}
+            onClick={() => router.push("/practice")}
             className="rounded-full bg-ink px-5 py-2.5 text-sm font-medium text-paper transition-opacity hover:opacity-90"
           >
             Start tomorrow&apos;s session

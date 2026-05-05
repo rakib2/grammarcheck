@@ -162,7 +162,7 @@ export default function PlacementPage() {
           </p>
           <div className="flex flex-wrap justify-center gap-2">
             <button
-              onClick={() => router.push("/")}
+              onClick={() => router.push("/practice")}
               className="rounded-full bg-ink px-5 py-2.5 text-sm font-medium text-paper transition-opacity hover:opacity-90"
             >
               Start a session

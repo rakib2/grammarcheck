@@ -94,7 +94,7 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
         }`}
       >
         <div className="border-b border-gray-100 px-4 py-4">
-          <Link href="/" className="flex items-center gap-2">
+          <Link href="/practice" className="flex items-center gap-2">
             <BrandMark size={25} />
             <span className="text-sm font-semibold tracking-[-0.01em] text-gray-900">GrammarFlow</span>
           </Link>
@@ -102,7 +102,7 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
 
         <div className="space-y-0.5 px-3 py-3 border-b border-gray-100">
           <Link
-            href="/"
+            href="/practice"
             className="flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-gray-500 transition-colors hover:bg-gray-50 hover:text-gray-700"
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -176,7 +176,7 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
               <path d="M3 12h18M3 6h18M3 18h18" />
             </svg>
           </button>
-          <Link href="/" className="flex items-center gap-2">
+          <Link href="/practice" className="flex items-center gap-2">
             <BrandMark size={22} />
             <span className="text-sm font-semibold tracking-[-0.01em] text-gray-900">GrammarFlow</span>
           </Link>
