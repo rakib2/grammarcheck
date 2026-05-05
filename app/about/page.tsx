@@ -24,7 +24,7 @@ export default function AboutPage() {
       <WhatThisIs />
       <WhatItDoes />
       <Contact />
-      <MarketingFooter showTagline={false} />
+      <MarketingFooter />
     </main>
   );
 }

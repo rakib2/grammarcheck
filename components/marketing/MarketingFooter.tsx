@@ -5,11 +5,7 @@ import BrandMark from "@/components/BrandMark";
  * Shared footer for public marketing pages (`/`, `/about`).
  * Server component — no auth dependence.
  */
-export default function MarketingFooter({
-  showTagline = true,
-}: {
-  showTagline?: boolean;
-}) {
+export default function MarketingFooter() {
   return (
     <footer className="border-t border-line bg-bg">
       <div className="mx-auto grid max-w-6xl gap-10 px-6 py-12 md:grid-cols-[1.5fr_1fr_1fr_1fr]">
@@ -52,7 +48,7 @@ export default function MarketingFooter({
       <div className="border-t border-line">
         <div className="mx-auto flex max-w-6xl flex-col items-start justify-between gap-2 px-6 py-5 text-[12px] text-mute md:flex-row md:items-center">
           <p>© 2026 GrammarFlow · grammarflow.io</p>
-          {showTagline && <p>Made with care · Düsseldorf</p>}
+          <p>Düsseldorf</p>
         </div>
       </div>
     </footer>
