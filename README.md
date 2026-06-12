@@ -4,6 +4,8 @@
 
 GrammarFlow is what happens when you replace Duolingo's gamified vocabulary drills with a real AI conversation partner that tracks every grammar mistake you make, explains why it's wrong, and adapts every session to your specific weaknesses.
 
+**[Try it live → grammarflow.io](https://grammarflow.io)**
+
 [![Deploy to Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/rakib2/grammarcheck&env=NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_ANON_KEY,SUPABASE_SERVICE_ROLE_KEY,ANTHROPIC_API_KEY,OPENAI_API_KEY)
 
 ---
@@ -154,7 +156,7 @@ docker-compose up
 
 ## Bring Your Own Keys (hosted)
 
-If you're using the hosted version at grammarflow.app, go to **Settings → API Keys** and paste your Anthropic and OpenAI keys. They're stored only in your browser's localStorage and sent directly to the server on each request — never persisted in our database.
+If you're using the hosted version at [grammarflow.io](https://grammarflow.io), go to **Settings → API Keys** and paste your Anthropic and OpenAI keys. They're stored only in your browser's localStorage and sent directly to the server on each request — never persisted in our database.
 
 This means GrammarFlow can run at **zero marginal cost** for the operator while still being fully functional for every user.
 
