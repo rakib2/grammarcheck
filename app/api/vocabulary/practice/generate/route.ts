@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID, createHash } from "node:crypto";
-import Anthropic from "@anthropic-ai/sdk";
+import { makeAnthropicClient, getAnthropicKey } from "@/lib/providerKey";
 import {
   CefrLevel,
   PooledExercise,
@@ -19,7 +19,6 @@ import {
  * caller chooses.
  */
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 function extractJSON(text: string): Record<string, unknown> {
   try {
@@ -110,6 +109,7 @@ interface VocabPracticeRequest {
 }
 
 export async function POST(request: NextRequest) {
+  const anthropic = makeAnthropicClient(getAnthropicKey(request));
   try {
     const body = (await request.json()) as VocabPracticeRequest;
     const {

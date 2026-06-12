@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { streamAnalyzeForConversation, LearnerContext } from "@/lib/anthropic";
+import { getAnthropicKey } from "@/lib/providerKey";
 import {
   processUserTurn,
   createLearnerModel,
@@ -30,6 +31,7 @@ interface ConverseRequestBody {
 }
 
 export async function POST(request: NextRequest) {
+  const anthropicKey = getAnthropicKey(request);
   try {
     const body: ConverseRequestBody = await request.json();
     const { sentence, learnerModel, conversationState, persistentErrors, sessionFocus } = body;
@@ -103,7 +105,8 @@ export async function POST(request: NextRequest) {
             learnerModel.nativeLanguage,
             conversationState.currentTarget,
             contextStr,
-            learnerContext
+            learnerContext,
+            anthropicKey
           );
 
           for await (const event of gen) {

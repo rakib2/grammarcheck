@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { analyzeGrammarFull } from "@/lib/anthropic";
 import { supabase } from "@/lib/supabase";
+import { getAnthropicKey } from "@/lib/providerKey";
 
 interface GrammarRequestBody {
   sentence: string;
@@ -21,7 +22,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const analysis = await analyzeGrammarFull(sentence, topic ?? null, nativeLanguage);
+    const analysis = await analyzeGrammarFull(sentence, topic ?? null, nativeLanguage, getAnthropicKey(request));
 
     // Persist to Supabase if userId is provided
     if (userId) {

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
+import { makeAnthropicClient, getAnthropicKey } from "@/lib/providerKey";
 import { getLessonById } from "@/lib/curriculum";
 import {
   ADAPTIVE_DRILL_MAX_ITEMS,
@@ -12,8 +12,6 @@ import {
 } from "@/lib/lessonEngine";
 import { ErrorPattern } from "@/types";
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
 function extractJSON(text: string): Record<string, unknown> {
   try {
     return JSON.parse(text);
@@ -25,6 +23,7 @@ function extractJSON(text: string): Record<string, unknown> {
 }
 
 export async function POST(request: NextRequest) {
+  const anthropic = makeAnthropicClient(getAnthropicKey(request));
   let fallback: FocusedSessionPlan | null = null;
   try {
     const { lessonId, nativeLanguage, errorPatterns, attemptKey } = (await request.json()) as {

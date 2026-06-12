@@ -26,3 +26,6 @@ next-env.d.ts
 # Claude Code local config (project hooks + per-user permissions).
 # Don't ship Claude state with the app build.
 .claude/
+
+# Claude Code auto-memory (personal notes, not for public repos)
+memory/

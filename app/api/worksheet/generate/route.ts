@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID, createHash } from "node:crypto";
-import Anthropic from "@anthropic-ai/sdk";
+import { makeAnthropicClient, getAnthropicKey } from "@/lib/providerKey";
 import { getLessonById } from "@/lib/curriculum";
 import { ErrorPattern, PooledExercise } from "@/types";
 
@@ -17,8 +17,6 @@ import { ErrorPattern, PooledExercise } from "@/types";
  *
  * The client persists via lib/exercisePoolSync.ingestBatch under RLS.
  */
-
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const WORKSHEET_SIZE_DEFAULT = 10;
 const WORKSHEET_SIZE_MAX = 20;
@@ -121,6 +119,7 @@ interface WorksheetGenerateRequest {
 }
 
 export async function POST(request: NextRequest) {
+  const anthropic = makeAnthropicClient(getAnthropicKey(request));
   try {
     const body = (await request.json()) as WorksheetGenerateRequest;
     const { lessonId, nativeLanguage, errorPatterns, itemCount } = body;

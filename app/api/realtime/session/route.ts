@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import OpenAI from "openai";
+import { makeOpenAIClient, getOpenAIKey } from "@/lib/providerKey";
 import { REALTIME_TOOLS } from "@/lib/realtimeTools";
 import { buildRealtimeInstructions } from "@/lib/realtimeInstructions";
 import { LearnerModel } from "@/types";
@@ -9,10 +9,6 @@ import { getUserFromRequest, getSupabaseAdmin } from "@/lib/supabaseServer";
 // so Vercel doesn't kill us at the default 10s on hobby.
 // Honored on Pro (up to 60s), clamped down on hobby automatically.
 export const maxDuration = 60;
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
 /**
  * Per-user daily cap on realtime voice sessions. Realtime audio runs ~$1–2
@@ -53,6 +49,7 @@ function limitForTier(tier: Tier): number {
  * Output: { token: string, expiresAt: number } | 429 when over cap
  */
 export async function POST(request: NextRequest) {
+  const openai = makeOpenAIClient(getOpenAIKey(request));
   try {
     // ── Optional auth + tier-based rate-limit enforcement ──
     const user = await getUserFromRequest(request);

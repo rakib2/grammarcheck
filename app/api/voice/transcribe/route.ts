@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import OpenAI, { toFile } from "openai";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+import { toFile } from "openai";
+import { makeOpenAIClient, getOpenAIKey } from "@/lib/providerKey";
 
 /**
  * POST /api/voice/transcribe
@@ -14,6 +11,7 @@ const openai = new OpenAI({
  * Privacy: only raw audio is sent to OpenAI — no user context, no learner model.
  */
 export async function POST(request: NextRequest) {
+  const openai = makeOpenAIClient(getOpenAIKey(request));
   try {
     const formData = await request.formData();
     const audioBlob = formData.get("audio") as Blob | null;

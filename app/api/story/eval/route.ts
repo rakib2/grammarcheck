@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
+import { makeAnthropicClient, getAnthropicKey } from "@/lib/providerKey";
 import { getLessonById } from "@/lib/curriculum";
 import { buildStoryEvalSystem } from "@/lib/lessonEngine";
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
 export async function POST(request: NextRequest) {
+  const anthropic = makeAnthropicClient(getAnthropicKey(request));
   try {
     const { lessonId, storySetup, answer } = await request.json();
     if (!lessonId || !answer) {

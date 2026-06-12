@@ -1,11 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
+import { makeAnthropicClient, getAnthropicKey } from "@/lib/providerKey";
 import { buildDrillEvalPrompt } from "@/lib/lessonEngine";
 import { getLessonById } from "@/lib/curriculum";
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
 
 function normalize(value: string): string {
   return value
@@ -86,6 +82,7 @@ function isDrillEvalResult(value: unknown): value is {
 }
 
 export async function POST(request: NextRequest) {
+  const anthropic = makeAnthropicClient(getAnthropicKey(request));
   let fallbackAnswer = "";
   let fallbackExpectedAnswer: string | undefined;
   try {

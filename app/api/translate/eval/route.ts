@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
+import { makeAnthropicClient, getAnthropicKey } from "@/lib/providerKey";
 import { buildTranslateEvalSystem } from "@/lib/lessonEngine";
 import { getLessonById } from "@/lib/curriculum";
 import { TranslationEvalResult, TranslationIssue } from "@/types";
@@ -14,8 +14,6 @@ import { TranslationEvalResult, TranslationIssue } from "@/types";
  * Body: { lessonId, english, germanReference, answer }
  * 200:  { score, correct, feedback, correctAnswer }
  */
-
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 function normalize(value: string): string {
   return value
@@ -91,6 +89,7 @@ function fallbackEval(
 }
 
 export async function POST(request: NextRequest) {
+  const anthropic = makeAnthropicClient(getAnthropicKey(request));
   let fallbackAnswer = "";
   let fallbackReference = "";
   try {

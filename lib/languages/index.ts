@@ -1,5 +1,7 @@
 import type { LanguageConfig } from "./types";
 import { GERMAN } from "./de";
+import { SPANISH } from "./es";
+import { FRENCH } from "./fr";
 
 /**
  * Language registry.
@@ -17,6 +19,8 @@ export const DEFAULT_LANGUAGE_ID = "de";
 
 export const LANGUAGES: Record<string, LanguageConfig> = {
   [GERMAN.id]: GERMAN,
+  [SPANISH.id]: SPANISH,
+  [FRENCH.id]: FRENCH,
 };
 
 export function getLanguageConfig(code: string | null | undefined): LanguageConfig {

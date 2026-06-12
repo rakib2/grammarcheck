@@ -73,6 +73,7 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
   const isOverview = pathname === "/progress";
   const isReview = pathname === "/review";
   const isVocabulary = pathname === "/vocabulary";
+  const isSettings = pathname === "/settings";
   // Active for both the index and any /worksheet/<topic> page.
   const isWorksheet = pathname.startsWith("/worksheet");
 
@@ -149,6 +150,16 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
             }`}
           >
             Overview
+          </Link>
+          <Link
+            href="/settings"
+            className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs transition-colors ${
+              isSettings
+                ? "bg-gray-100 font-medium text-gray-900"
+                : "text-gray-500 hover:bg-gray-50 hover:text-gray-700"
+            }`}
+          >
+            API Keys
           </Link>
         </div>
 

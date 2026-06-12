@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
+import { makeAnthropicClient, getAnthropicKey } from "@/lib/providerKey";
 import { CefrLevel } from "@/types";
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
 
 // Placement test prompts — 2 per level, A1 through C1
 const PLACEMENT_PROMPTS: { level: CefrLevel; prompt: string }[] = [
@@ -31,6 +27,7 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const anthropic = makeAnthropicClient(getAnthropicKey(request));
   try {
     const { answers } = await request.json();
 

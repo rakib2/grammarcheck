@@ -7,6 +7,12 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
+/** Return a client using the user-provided key, or fall back to the shared env-var client. */
+export function getClient(apiKey?: string | null): Anthropic {
+  if (apiKey) return new Anthropic({ apiKey });
+  return anthropic;
+}
+
 /** Strip markdown code fences and parse JSON safely */
 function safeParseJSON<T>(text: string): T {
   let cleaned = text.trim();
@@ -70,22 +76,24 @@ export interface AnalysisWithLevel extends GrammarAnalysis {
 export async function analyzeGrammar(
   sentence: string,
   targetTopic: string,
-  nativeLanguage: string
+  nativeLanguage: string,
+  apiKey?: string
 ): Promise<GrammarAnalysis> {
-  const result = await analyzeGrammarFull(sentence, targetTopic, nativeLanguage);
+  const result = await analyzeGrammarFull(sentence, targetTopic, nativeLanguage, apiKey);
   return result;
 }
 
 export async function analyzeGrammarFull(
   sentence: string,
   targetTopic: string | null,
-  nativeLanguage: string
+  nativeLanguage: string,
+  apiKey?: string
 ): Promise<AnalysisWithLevel> {
   const topicInstruction = targetTopic
     ? `The grammar topic to focus on is "${targetTopic}".`
     : `Auto-detect the grammar topic from the sentence.`;
 
-  const message = await anthropic.messages.create({
+  const message = await getClient(apiKey).messages.create({
     model: "claude-sonnet-4-20250514",
     max_tokens: 1024,
     system: `You are a warm, patient German conversation partner helping someone practice. The user's native language is ${nativeLanguage}. ${topicInstruction}
@@ -330,13 +338,14 @@ export async function* streamAnalyzeForConversation(
   nativeLanguage: string,
   targetStructureId: string | null,
   conversationContext: string,
-  learnerContext?: LearnerContext
+  learnerContext?: LearnerContext,
+  apiKey?: string
 ): AsyncGenerator<{ type: "token"; text: string } | { type: "coachDone"; text: string } | { type: "analysis"; data: APIAnalysisResult }> {
   const model = selectModel(learnerContext);
   const systemPrompt = buildConversationPrompt(nativeLanguage, targetStructureId, learnerContext);
   const messages = buildMessages(sentence, conversationContext, learnerContext?.coachLanguage);
 
-  const stream = anthropic.messages.stream({
+  const stream = getClient(apiKey).messages.stream({
     model,
     max_tokens: 1500,
     system: systemPrompt,
@@ -444,13 +453,14 @@ export async function analyzeForConversation(
   targetStructureId: string | null,
   conversationContext: string,
   learnerContext?: LearnerContext,
-  opts: { preferFast?: boolean } = {}
+  opts: { preferFast?: boolean } = {},
+  apiKey?: string
 ): Promise<APIAnalysisResult> {
   const model = selectModel(learnerContext, opts);
   const systemPrompt = buildConversationPrompt(nativeLanguage, targetStructureId, learnerContext);
   const messages = buildMessages(sentence, conversationContext, learnerContext?.coachLanguage);
 
-  const message = await anthropic.messages.create({
+  const message = await getClient(apiKey).messages.create({
     model,
     max_tokens: opts.preferFast ? 3000 : 2200,
     system: systemPrompt,

@@ -1,9 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import OpenAI from "openai";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+import { makeOpenAIClient, getOpenAIKey } from "@/lib/providerKey";
 
 type Voice = "nova" | "shimmer" | "alloy" | "echo" | "fable" | "onyx";
 
@@ -14,6 +10,7 @@ type Voice = "nova" | "shimmer" | "alloy" | "echo" | "fable" | "onyx";
  * Returns audio as an MP3 stream for instant playback.
  */
 export async function POST(request: NextRequest) {
+  const openai = makeOpenAIClient(getOpenAIKey(request));
   try {
     const { text, voice = "nova" } = await request.json();
 

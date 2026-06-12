@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
-import OpenAI, { toFile } from "openai";
+import { toFile } from "openai";
+import { makeOpenAIClient, makeAnthropicClient, getOpenAIKey, getAnthropicKey } from "@/lib/providerKey";
 import { streamAnalyzeForConversation, LearnerContext } from "@/lib/anthropic";
 import {
   processUserTurn,
@@ -7,10 +8,6 @@ import {
   createConversationState,
 } from "@/lib/conversationEngine";
 import { LearnerModel, ConversationState } from "@/types";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
 /**
  * POST /api/voice/pipeline
@@ -38,6 +35,8 @@ const openai = new OpenAI({
  *   - Claude sees transcript + teaching context (same as existing /api/converse)
  */
 export async function POST(request: NextRequest) {
+  const openai = makeOpenAIClient(getOpenAIKey(request));
+  const anthropicKey = getAnthropicKey(request);
   const encoder = new TextEncoder();
 
   function encode(event: Record<string, unknown>): Uint8Array {
@@ -131,7 +130,8 @@ export async function POST(request: NextRequest) {
           learnerModel.nativeLanguage,
           conversationState.currentTarget,
           contextStr,
-          learnerContext
+          learnerContext,
+          anthropicKey
         );
 
         // ── 4. Stream tokens + collect sentences for TTS ──
